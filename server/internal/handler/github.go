@@ -118,7 +118,7 @@ func githubInstallationToBroadcast(i db.GithubInstallation) GitHubInstallationRe
 	return resp
 }
 
-func githubPullRequestToResponse(p db.GithubPullRequest) GitHubPullRequestResponse {
+func githubPullRequestToResponse(p db.PullRequest) GitHubPullRequestResponse {
 	return GitHubPullRequestResponse{
 		ID:              uuidToString(p.ID),
 		WorkspaceID:     uuidToString(p.WorkspaceID),
@@ -683,7 +683,7 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, body []byte) {
 	mergeable, clearMergeable := derivePRMergeableState(p.Action, p.PullRequest.MergeableState, baseRefChanged(p.Changes))
 	pr, err := h.Queries.UpsertGitHubPullRequest(ctx, db.UpsertGitHubPullRequestParams{
 		WorkspaceID:         inst.WorkspaceID,
-		InstallationID:      inst.InstallationID,
+		InstallationID:      pgtype.Int8{Int64: inst.InstallationID, Valid: true},
 		RepoOwner:           p.Repository.Owner.Login,
 		RepoName:            p.Repository.Name,
 		PrNumber:            p.PullRequest.Number,

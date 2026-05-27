@@ -51,18 +51,20 @@ RETURNING id, workspace_id;
 --      mergeability, and silently clobbering a known clean/dirty would lose
 --      information that GitHub only re-computes lazily.
 -- INSERT path always writes the incoming value (NULL acceptable for a new row).
-INSERT INTO github_pull_request (
+INSERT INTO pull_request (
     workspace_id, installation_id, repo_owner, repo_name, pr_number,
     title, state, html_url, branch, author_login, author_avatar_url,
     merged_at, closed_at, pr_created_at, pr_updated_at,
     head_sha, mergeable_state,
-    additions, deletions, changed_files
+    additions, deletions, changed_files,
+    source
 ) VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8, sqlc.narg('branch'), sqlc.narg('author_login'), sqlc.narg('author_avatar_url'),
     sqlc.narg('merged_at'), sqlc.narg('closed_at'), $9, $10,
     $11, sqlc.narg('mergeable_state'),
-    $12, $13, $14
+    $12, $13, $14,
+    'github'
 )
 ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     installation_id = EXCLUDED.installation_id,
@@ -79,7 +81,7 @@ ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     mergeable_state = CASE
         WHEN COALESCE(sqlc.narg('clear_mergeable_state')::boolean, FALSE) THEN NULL
         WHEN EXCLUDED.mergeable_state IS NOT NULL THEN EXCLUDED.mergeable_state
-        ELSE github_pull_request.mergeable_state
+        ELSE pull_request.mergeable_state
     END,
     additions     = EXCLUDED.additions,
     deletions     = EXCLUDED.deletions,
@@ -88,7 +90,7 @@ ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
 RETURNING *;
 
 -- name: GetGitHubPullRequest :one
-SELECT * FROM github_pull_request
+SELECT * FROM pull_request
 WHERE workspace_id = $1 AND repo_owner = $2 AND repo_name = $3 AND pr_number = $4;
 
 -- name: ListPullRequestsByIssue :many
@@ -103,14 +105,14 @@ WHERE workspace_id = $1 AND repo_owner = $2 AND repo_name = $3 AND pr_number = $
 -- pending view.
 WITH issue_prs AS (
     SELECT pr.id, pr.head_sha
-    FROM github_pull_request pr
+    FROM pull_request pr
     JOIN issue_pull_request ipr ON ipr.pull_request_id = pr.id
     WHERE ipr.issue_id = sqlc.arg('issue_id')
 ),
 per_app_latest AS (
     SELECT DISTINCT ON (cs.pr_id, cs.app_id)
         cs.pr_id, cs.app_id, cs.conclusion, cs.status
-    FROM github_pull_request_check_suite cs
+    FROM pull_request_check_suite cs
     JOIN issue_prs ip ON ip.id = cs.pr_id
     WHERE cs.head_sha = ip.head_sha AND ip.head_sha <> ''
     ORDER BY cs.pr_id, cs.app_id, cs.updated_at DESC
@@ -141,7 +143,7 @@ SELECT
     COALESCE(c.passed, 0)::bigint  AS checks_passed,
     COALESCE(c.failed, 0)::bigint  AS checks_failed,
     COALESCE(c.pending, 0)::bigint AS checks_pending
-FROM github_pull_request pr
+FROM pull_request pr
 JOIN issue_pull_request ipr ON ipr.pull_request_id = pr.id
 LEFT JOIN checks c ON c.pr_id = pr.id
 WHERE ipr.issue_id = sqlc.arg('issue_id')
@@ -163,7 +165,7 @@ WHERE pull_request_id = $1;
 SELECT
     COALESCE(SUM(CASE WHEN pr.state IN ('open', 'draft') THEN 1 ELSE 0 END), 0)::bigint AS open_count,
     COALESCE(SUM(CASE WHEN pr.state = 'merged' AND ipr.close_intent THEN 1 ELSE 0 END), 0)::bigint AS merged_with_close_intent_count
-FROM github_pull_request pr
+FROM pull_request pr
 JOIN issue_pull_request ipr ON ipr.pull_request_id = pr.id
 WHERE ipr.issue_id = $1;
 
@@ -178,7 +180,7 @@ WHERE ipr.issue_id = $1;
 -- events targeting an old head still land here (their head_sha is stored
 -- on the row); the head_sha filter in ListPullRequestsByIssue keeps them
 -- out of the current aggregate.
-INSERT INTO github_pull_request_check_suite (
+INSERT INTO pull_request_check_suite (
     pr_id, suite_id, head_sha, app_id, conclusion, status, updated_at
 ) VALUES (
     $1, $2, $3, $4, sqlc.narg('conclusion'), $5, $6
@@ -189,7 +191,7 @@ ON CONFLICT (pr_id, suite_id) DO UPDATE SET
     conclusion = EXCLUDED.conclusion,
     status     = EXCLUDED.status,
     updated_at = EXCLUDED.updated_at
-WHERE EXCLUDED.updated_at >= github_pull_request_check_suite.updated_at;
+WHERE EXCLUDED.updated_at >= pull_request_check_suite.updated_at;
 
 -- =====================
 -- Issue ↔ Pull Request link
