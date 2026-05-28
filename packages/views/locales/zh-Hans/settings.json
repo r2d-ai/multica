@@ -82,6 +82,18 @@
       "description": "控制 Multica 在后台时是否显示操作系统的原生通知横幅。",
       "label": "显示系统通知",
       "hint": "App 未获得焦点时，新的收件箱条目通过操作系统弹出通知横幅。"
+    },
+    "telegram": {
+      "title": "Telegram",
+      "description": "为收件箱条目和状态流转发送工作区 Telegram 通知。",
+      "bot_token_label": "Bot Token",
+      "user_id_label": "User ID",
+      "validation_error": "请同时填写 Bot Token 和 User ID，或将两项都清空。",
+      "partial_config_error": "Telegram 通知需要同时配置 Bot Token 和 User ID。",
+      "save": "保存",
+      "saving": "保存中...",
+      "toast_saved": "Telegram 通知已保存",
+      "toast_save_failed": "保存 Telegram 通知失败"
     }
   },
   "tokens": {

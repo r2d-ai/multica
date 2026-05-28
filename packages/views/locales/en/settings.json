@@ -82,6 +82,18 @@
       "description": "Control native OS notification banners shown when Multica is in the background.",
       "label": "Show system notifications",
       "hint": "Show a banner from your operating system for new inbox items when the app isn't focused."
+    },
+    "telegram": {
+      "title": "Telegram",
+      "description": "Send workspace Telegram notifications for inbox items and status transitions.",
+      "bot_token_label": "Bot token",
+      "user_id_label": "User ID",
+      "validation_error": "Enter both Telegram bot token and user ID, or clear both fields.",
+      "partial_config_error": "Telegram notifications require both a bot token and a user ID.",
+      "save": "Save",
+      "saving": "Saving...",
+      "toast_saved": "Telegram notifications saved",
+      "toast_save_failed": "Failed to save Telegram notifications"
     }
   },
   "tokens": {

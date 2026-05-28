@@ -52,7 +52,17 @@ export type {
   RuntimeLocalSkillImportResult,
   IssueUsageSummary,
 } from "./agent";
-export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
+export type {
+  Workspace,
+  WorkspaceRepo,
+  WorkspaceSettings,
+  WorkspaceTelegramSettings,
+  Member,
+  MemberRole,
+  User,
+  MemberWithUser,
+  Invitation,
+} from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
 export type { Comment, CommentType, CommentAuthorType, Reaction } from "./comment";
