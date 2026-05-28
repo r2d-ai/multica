@@ -76,7 +76,7 @@ export function NotificationsTab() {
   const handleTelegramSave = async () => {
     if (!workspace) return;
     if (hasPartialConfig) {
-      toast.error("Enter both Telegram bot token and user ID, or clear both fields.");
+      toast.error(t(($) => $.notifications.telegram.validation_error));
       return;
     }
 
@@ -96,9 +96,13 @@ export function NotificationsTab() {
       qc.setQueryData(workspaceKeys.list(), (old: Workspace[] | undefined) =>
         old?.map((ws) => (ws.id === updated.id ? updated : ws)),
       );
-      toast.success("Telegram notifications saved");
+      toast.success(t(($) => $.notifications.telegram.toast_saved));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save Telegram notifications");
+      toast.error(
+        e instanceof Error && e.message
+          ? e.message
+          : t(($) => $.notifications.telegram.toast_save_failed),
+      );
     } finally {
       setSaving(false);
     }
@@ -168,16 +172,18 @@ export function NotificationsTab() {
 
       <section className="space-y-4">
         <div>
-          <h2 className="text-sm font-semibold">Telegram</h2>
+          <h2 className="text-sm font-semibold">{t(($) => $.notifications.telegram.title)}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Send workspace Telegram notifications for inbox items and status transitions.
+            {t(($) => $.notifications.telegram.description)}
           </p>
         </div>
 
         <Card>
           <CardContent className="space-y-3">
             <div>
-              <Label className="text-xs text-muted-foreground">Bot token</Label>
+              <Label className="text-xs text-muted-foreground">
+                {t(($) => $.notifications.telegram.bot_token_label)}
+              </Label>
               <Input
                 type="password"
                 value={botToken}
@@ -189,7 +195,9 @@ export function NotificationsTab() {
             </div>
 
             <div>
-              <Label className="text-xs text-muted-foreground">User ID</Label>
+              <Label className="text-xs text-muted-foreground">
+                {t(($) => $.notifications.telegram.user_id_label)}
+              </Label>
               <Input
                 type="text"
                 value={userId}
@@ -201,7 +209,7 @@ export function NotificationsTab() {
 
             {hasPartialConfig && (
               <p className="text-xs text-destructive">
-                Telegram notifications require both a bot token and a user ID.
+                {t(($) => $.notifications.telegram.partial_config_error)}
               </p>
             )}
 
@@ -211,7 +219,9 @@ export function NotificationsTab() {
                 onClick={handleTelegramSave}
                 disabled={!canManageWorkspace || saving || hasPartialConfig}
               >
-                {saving ? "Saving..." : "Save"}
+                {saving
+                  ? t(($) => $.notifications.telegram.saving)
+                  : t(($) => $.notifications.telegram.save)}
               </Button>
             </div>
           </CardContent>
