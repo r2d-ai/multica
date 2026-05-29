@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/events"
@@ -74,6 +75,31 @@ func newNotificationBus(t *testing.T, queries *db.Queries) *events.Bus {
 	registerSubscriberListeners(bus, queries)
 	registerNotificationListeners(bus, queries)
 	return bus
+}
+
+func addTestWorkspaceMember(t *testing.T, workspaceID, userID, role string) {
+	t.Helper()
+	_, err := testPool.Exec(context.Background(), `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (workspace_id, user_id) DO NOTHING
+	`, workspaceID, userID, role)
+	if err != nil {
+		t.Fatalf("addTestWorkspaceMember: %v", err)
+	}
+}
+
+func swapWorkspaceSettings(t *testing.T, workspaceID string, settings json.RawMessage) json.RawMessage {
+	t.Helper()
+	ctx := context.Background()
+	var prev json.RawMessage
+	if err := testPool.QueryRow(ctx, `SELECT settings FROM workspace WHERE id = $1`, workspaceID).Scan(&prev); err != nil {
+		t.Fatalf("read workspace settings: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET settings = $1 WHERE id = $2`, settings, workspaceID); err != nil {
+		t.Fatalf("update workspace settings: %v", err)
+	}
+	return prev
 }
 
 // TestNotification_IssueCreated_AssigneeNotified verifies that when an issue is
@@ -385,6 +411,99 @@ func TestNotification_CommentCreated(t *testing.T) {
 	commenterItems := inboxItemsForRecipient(t, queries, commenterID)
 	if len(commenterItems) != 0 {
 		t.Fatalf("expected 0 inbox items for commenter, got %d", len(commenterItems))
+	}
+}
+
+// TestTelegram_OneMessagePerCommentDespiteMentions verifies that a single
+// comment:created event sends exactly one Telegram message even when @all
+// expands to many inbox rows (new_comment for subscribers plus mentioned).
+func TestTelegram_OneMessagePerCommentDespiteMentions(t *testing.T) {
+	var sendCount int
+	oldSend := telegramSendMessage
+	telegramSendMessage = func(ctx context.Context, botToken, userID, text, parseMode string) error {
+		sendCount++
+		if parseMode != "HTML" {
+			t.Errorf("expected parse_mode HTML, got %q", parseMode)
+		}
+		return nil
+	}
+	t.Cleanup(func() { telegramSendMessage = oldSend })
+
+	telegramSettings, err := json.Marshal(map[string]any{
+		"telegram": map[string]string{
+			"bot_token": "test-bot-token",
+			"user_id":   "123456789",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal telegram settings: %v", err)
+	}
+	prevSettings := swapWorkspaceSettings(t, testWorkspaceID, telegramSettings)
+	t.Cleanup(func() { swapWorkspaceSettings(t, testWorkspaceID, prevSettings) })
+
+	queries := db.New(testPool)
+	bus := newNotificationBus(t, queries)
+
+	commenterEmail := "notif-telegram-commenter@multica.ai"
+	commenterID := createTestUser(t, commenterEmail)
+	t.Cleanup(func() { cleanupTestUser(t, commenterEmail) })
+	addTestWorkspaceMember(t, testWorkspaceID, commenterID, "member")
+
+	sub1Email := "notif-telegram-sub1@multica.ai"
+	sub1ID := createTestUser(t, sub1Email)
+	t.Cleanup(func() { cleanupTestUser(t, sub1Email) })
+	addTestWorkspaceMember(t, testWorkspaceID, sub1ID, "member")
+
+	sub2Email := "notif-telegram-sub2@multica.ai"
+	sub2ID := createTestUser(t, sub2Email)
+	t.Cleanup(func() { cleanupTestUser(t, sub2Email) })
+	addTestWorkspaceMember(t, testWorkspaceID, sub2ID, "member")
+
+	// Workspace member who is not subscribed — still notified via @all.
+	mentionOnlyEmail := "notif-telegram-mention-only@multica.ai"
+	mentionOnlyID := createTestUser(t, mentionOnlyEmail)
+	t.Cleanup(func() { cleanupTestUser(t, mentionOnlyEmail) })
+	addTestWorkspaceMember(t, testWorkspaceID, mentionOnlyID, "member")
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupInboxForIssue(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	addTestSubscriber(t, issueID, "member", testUserID, "creator")
+	addTestSubscriber(t, issueID, "member", sub1ID, "assignee")
+	addTestSubscriber(t, issueID, "member", sub2ID, "commenter")
+
+	var inboxEvents []events.Event
+	bus.Subscribe(protocol.EventInboxNew, func(e events.Event) {
+		inboxEvents = append(inboxEvents, e)
+	})
+
+	bus.Publish(events.Event{
+		Type:        protocol.EventCommentCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     commenterID,
+		Payload: map[string]any{
+			"comment": handler.CommentResponse{
+				ID:         "00000000-0000-0000-0000-000000000001",
+				IssueID:    issueID,
+				AuthorType: "member",
+				AuthorID:   commenterID,
+				Content:    "[@All](mention://all/all) heads up everyone",
+				Type:       "comment",
+			},
+			"issue_title":  "telegram @all test issue",
+			"issue_status": "todo",
+		},
+	})
+
+	if len(inboxEvents) < 2 {
+		t.Fatalf("expected multiple inbox:new events from subscribers + @all, got %d", len(inboxEvents))
+	}
+	if sendCount != 1 {
+		t.Fatalf("expected exactly 1 Telegram send for one comment, got %d", sendCount)
 	}
 }
 
