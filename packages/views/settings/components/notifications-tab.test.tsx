@@ -49,8 +49,11 @@ describe("NotificationsTab", () => {
     const user = userEvent.setup();
     render(<NotificationsTab />);
 
-    const switches = screen.getAllByRole("switch");
-    await user.click(switches[0]);
+    const [firstSwitch] = screen.getAllByRole("switch");
+    if (!firstSwitch) {
+      throw new Error("expected at least one notification toggle");
+    }
+    await user.click(firstSwitch);
 
     expect(mockMutate).toHaveBeenCalled();
   });
