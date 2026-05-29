@@ -100,6 +100,7 @@ func init() {
 	workspaceUpdateCmd.Flags().String("output", "json", "Output format: table or json")
 	workspaceTelegramCmd.Flags().String("bot-token", "", "Telegram bot token")
 	workspaceTelegramCmd.Flags().String("user-id", "", "Telegram user ID / chat ID")
+	workspaceTelegramCmd.Flags().Bool("notify-reactions", false, "Send reaction notifications to Telegram (only applied when this flag is set)")
 	workspaceTelegramCmd.Flags().Bool("clear", false, "Clear the Telegram configuration for this workspace")
 	workspaceTelegramCmd.Flags().String("output", "json", "Output format: table or json")
 }
@@ -530,10 +531,19 @@ func runWorkspaceTelegram(cmd *cobra.Command, args []string) error {
 	if clearConfig {
 		delete(nextSettings, "telegram")
 	} else {
-		nextSettings["telegram"] = map[string]any{
+		telegram := map[string]any{
 			"bot_token": botToken,
 			"user_id":   userID,
 		}
+		if cmd.Flags().Changed("notify-reactions") {
+			notifyReactions, _ := cmd.Flags().GetBool("notify-reactions")
+			telegram["notify_reactions"] = notifyReactions
+		} else if prev, ok := settings["telegram"].(map[string]any); ok {
+			if v, exists := prev["notify_reactions"]; exists {
+				telegram["notify_reactions"] = v
+			}
+		}
+		nextSettings["telegram"] = telegram
 	}
 
 	var updated map[string]any

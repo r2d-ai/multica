@@ -8,6 +8,8 @@ export interface WorkspaceRepo {
 export interface WorkspaceTelegramSettings {
   bot_token: string;
   user_id: string;
+  /** When false, skip Telegram for reactions. Default: send. */
+  notify_reactions?: boolean;
 }
 
 export interface WorkspaceSettings {
