@@ -41,6 +41,19 @@ func TestTelegramNotifyReactionsEnabled(t *testing.T) {
 
 func boolPtr(b bool) *bool { return &b }
 
+func TestParseTelegramSendResponseOKFalse(t *testing.T) {
+	err := parseTelegramSendResponse(200, []byte(`{"ok":false,"description":"chat not found"}`))
+	if err == nil || !strings.Contains(err.Error(), "chat not found") {
+		t.Fatalf("expected chat not found error, got %v", err)
+	}
+}
+
+func TestParseTelegramSendResponseOKTrue(t *testing.T) {
+	if err := parseTelegramSendResponse(200, []byte(`{"ok":true}`)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestFormatTelegramCommentHTML(t *testing.T) {
 	html := formatTelegramCommentHTML(formatTelegramInput{
 		WorkspaceName: "R&D Team",

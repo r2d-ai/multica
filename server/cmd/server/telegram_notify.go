@@ -73,9 +73,31 @@ var telegramSendMessage = func(ctx context.Context, botToken, userID, text, pars
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("telegram sendMessage returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("telegram sendMessage read response: %w", err)
+	}
+	return parseTelegramSendResponse(resp.StatusCode, respBody)
+}
+
+func parseTelegramSendResponse(statusCode int, body []byte) error {
+	if statusCode >= 400 {
+		return fmt.Errorf("telegram sendMessage returned %d: %s", statusCode, strings.TrimSpace(string(body)))
+	}
+
+	var apiResp struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return fmt.Errorf("telegram sendMessage decode response: %w", err)
+	}
+	if !apiResp.OK {
+		desc := strings.TrimSpace(apiResp.Description)
+		if desc == "" {
+			desc = "unknown error"
+		}
+		return fmt.Errorf("telegram sendMessage: %s", desc)
 	}
 	return nil
 }

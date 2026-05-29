@@ -59,11 +59,14 @@ export function IntegrationsTab() {
     if (!botToken.trim() && !userId.trim()) {
       delete nextSettings.telegram;
     } else {
-      nextSettings.telegram = {
+      const telegram: NonNullable<Workspace["settings"]["telegram"]> = {
         bot_token: botToken.trim(),
         user_id: userId.trim(),
-        notify_reactions: notifyReactions,
       };
+      if (!notifyReactions) {
+        telegram.notify_reactions = false;
+      }
+      nextSettings.telegram = telegram;
     }
 
     try {

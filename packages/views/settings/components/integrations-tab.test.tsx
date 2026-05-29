@@ -119,7 +119,6 @@ describe("IntegrationsTab", () => {
         telegram: {
           bot_token: "new-token",
           user_id: "new-user",
-          notify_reactions: true,
         },
       },
     });
