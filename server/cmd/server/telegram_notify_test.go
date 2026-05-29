@@ -63,6 +63,8 @@ func TestFormatTelegramCommentHTML(t *testing.T) {
 		IssueID:       "uuid",
 		Title:         "Allow IP <test>",
 		ActorName:     "Binh",
+		AssigneeName:  "Alex",
+		ProjectName:   "Sandbox",
 		Preview:       "hello",
 	})
 	if !strings.Contains(html, "RD-65") || !strings.Contains(html, `href="https://app.test/rd/issues/RD-65"`) {
@@ -70,5 +72,74 @@ func TestFormatTelegramCommentHTML(t *testing.T) {
 	}
 	if strings.Contains(html, "<test>") {
 		t.Fatal("title must be escaped")
+	}
+	if !strings.Contains(html, "Assignee: Alex") || !strings.Contains(html, "Project: Sandbox") {
+		t.Fatalf("missing meta lines: %s", html)
+	}
+}
+
+func TestFormatTelegramStatusHTMLIncludesActorAndAssignee(t *testing.T) {
+	html := formatTelegramStatusHTML(formatTelegramInput{
+		WorkspaceName: "R&D Team",
+		Identifier:    "RD-77",
+		Title:         "Sandbox task",
+		ActorName:     "Alex",
+		AssigneeName:  "Alex",
+	}, "todo", "backlog")
+	if !strings.Contains(html, "Alex") || !strings.Contains(html, "changed status") {
+		t.Fatalf("missing actor line: %s", html)
+	}
+	if !strings.Contains(html, "Assignee: Alex") {
+		t.Fatalf("missing assignee: %s", html)
+	}
+	if !strings.Contains(html, "Todo → Backlog") {
+		t.Fatalf("missing transition: %s", html)
+	}
+}
+
+func TestFormatTelegramCreatedHTML(t *testing.T) {
+	html := formatTelegramCreatedHTML(formatTelegramInput{
+		WorkspaceName: "R&D Team",
+		Origin:        "https://app.test",
+		Slug:          "rd",
+		Identifier:    "RD-73",
+		Title:         "New task",
+		ActorName:     "Alex",
+		AssigneeName:  "Alex",
+		ProjectName:   "DevSecOps",
+		DueDate:       "2026-06-15",
+	})
+	for _, want := range []string{"🆕", "RD-73", "Project: DevSecOps", "Assignee: Alex", "Due: 2026-06-15", "Created by <b>Alex</b>"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("missing %q in %s", want, html)
+		}
+	}
+}
+
+func TestStripMentionsForPreviewTruncatesAndStripsMarkdown(t *testing.T) {
+	long := strings.Repeat("word ", 40)
+	got := stripMentionsForPreview("**Hello** @Alex\n- item one\n" + long)
+	if strings.Contains(got, "**") || strings.Contains(got, "\n") {
+		t.Fatalf("markdown/newlines should be stripped: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("expected ellipsis truncation, got %q", got)
+	}
+	if len([]rune(got)) > telegramPreviewMaxRunes {
+		t.Fatalf("preview too long: %d runes", len([]rune(got)))
+	}
+}
+
+func TestTruncateWithEllipsisTitle(t *testing.T) {
+	longTitle := strings.Repeat("a", 100)
+	line := formatTelegramIssueLine(formatTelegramInput{
+		Identifier: "RD-1",
+		Title:      longTitle,
+	})
+	if strings.Contains(line, strings.Repeat("a", 90)) {
+		t.Fatalf("title should be truncated: %s", line)
+	}
+	if !strings.Contains(line, "…") {
+		t.Fatalf("expected ellipsis in title: %s", line)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,19 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+const (
+	telegramTitleMaxRunes  = 80
+	telegramPreviewMaxRunes = 120
+)
+
+var (
+	telegramMarkdownLinkRe = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
+	telegramBoldRe         = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	telegramItalicRe       = regexp.MustCompile(`(?m)\*([^*]+)\*`)
+	telegramCodeRe         = regexp.MustCompile("`([^`]+)`")
+	telegramWhitespaceRe   = regexp.MustCompile(`\s+`)
 )
 
 // formatTelegramInput is shared by Telegram HTML message formatters.
@@ -28,6 +42,9 @@ type formatTelegramInput struct {
 	IssueID       string
 	Title         string
 	ActorName     string
+	AssigneeName  string
+	ProjectName   string
+	DueDate       string
 	Preview       string
 }
 
@@ -158,8 +175,22 @@ func telegramReactionsEnabled(cfg *telegramSettings) bool {
 	return *cfg.NotifyReactions
 }
 
+func truncateWithEllipsis(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	if max <= 1 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-1]) + "…"
+}
+
 func formatTelegramIssueLine(in formatTelegramInput) string {
-	title := htmlEscape(in.Title)
+	title := htmlEscape(truncateWithEllipsis(in.Title, telegramTitleMaxRunes))
 	segment := strings.TrimSpace(in.Identifier)
 	if segment == "" {
 		segment = strings.TrimSpace(in.IssueID)
@@ -174,12 +205,47 @@ func formatTelegramIssueLine(in formatTelegramInput) string {
 	return title
 }
 
+func writeTelegramIssueMeta(b *strings.Builder, in formatTelegramInput) {
+	assignee := strings.TrimSpace(in.AssigneeName)
+	if assignee == "" {
+		assignee = "Unassigned"
+	}
+	b.WriteString("\nAssignee: ")
+	b.WriteString(htmlEscape(assignee))
+
+	project := strings.TrimSpace(in.ProjectName)
+	if project != "" {
+		b.WriteString("\nProject: ")
+		b.WriteString(htmlEscape(project))
+	}
+
+	due := strings.TrimSpace(in.DueDate)
+	if due != "" {
+		b.WriteString("\nDue: ")
+		b.WriteString(htmlEscape(due))
+	}
+}
+
+func formatTelegramCreatedHTML(in formatTelegramInput) string {
+	var b strings.Builder
+	b.WriteString("🆕 <b>")
+	b.WriteString(htmlEscape(in.WorkspaceName))
+	b.WriteString("</b>\n")
+	b.WriteString(formatTelegramIssueLine(in))
+	writeTelegramIssueMeta(&b, in)
+	b.WriteString("\nCreated by <b>")
+	b.WriteString(htmlEscape(in.ActorName))
+	b.WriteString("</b>")
+	return b.String()
+}
+
 func formatTelegramCommentHTML(in formatTelegramInput) string {
 	var b strings.Builder
 	b.WriteString("💬 <b>")
 	b.WriteString(htmlEscape(in.WorkspaceName))
 	b.WriteString("</b>\n")
 	b.WriteString(formatTelegramIssueLine(in))
+	writeTelegramIssueMeta(&b, in)
 	b.WriteString("\n\n<b>")
 	b.WriteString(htmlEscape(in.ActorName))
 	b.WriteString("</b> commented:\n")
@@ -193,7 +259,10 @@ func formatTelegramStatusHTML(in formatTelegramInput, fromStatus, toStatus strin
 	b.WriteString(htmlEscape(in.WorkspaceName))
 	b.WriteString("</b>\n")
 	b.WriteString(formatTelegramIssueLine(in))
-	b.WriteString("\n\n")
+	writeTelegramIssueMeta(&b, in)
+	b.WriteString("\n\n<b>")
+	b.WriteString(htmlEscape(in.ActorName))
+	b.WriteString("</b> changed status: ")
 	b.WriteString(htmlEscape(statusLabel(fromStatus)))
 	b.WriteString(" → ")
 	b.WriteString(htmlEscape(statusLabel(toStatus)))
@@ -234,18 +303,13 @@ func formatTelegramReactionHTML(in formatTelegramInput, emoji string, onComment 
 
 func stripMentionsForPreview(content string) string {
 	s := util.MentionRe.ReplaceAllString(content, "@$1")
-	return truncateRunes(s, 300)
-}
-
-func truncateRunes(s string, max int) string {
-	if max <= 0 {
-		return ""
-	}
-	runes := []rune(s)
-	if len(runes) <= max {
-		return s
-	}
-	return string(runes[:max])
+	s = telegramMarkdownLinkRe.ReplaceAllString(s, "$1")
+	s = telegramBoldRe.ReplaceAllString(s, "$1")
+	s = telegramItalicRe.ReplaceAllString(s, "$1")
+	s = telegramCodeRe.ReplaceAllString(s, "$1")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = telegramWhitespaceRe.ReplaceAllString(strings.TrimSpace(s), " ")
+	return truncateWithEllipsis(s, telegramPreviewMaxRunes)
 }
 
 func telegramIssuePrefix(ws db.Workspace) string {
@@ -290,6 +354,31 @@ func telegramActorDisplayName(ctx context.Context, queries *db.Queries, actorTyp
 	return "Someone"
 }
 
+func telegramAssigneeDisplayName(ctx context.Context, queries *db.Queries, issue db.Issue) string {
+	if !issue.AssigneeType.Valid || !issue.AssigneeID.Valid {
+		return ""
+	}
+	return telegramActorDisplayName(ctx, queries, issue.AssigneeType.String, util.UUIDToString(issue.AssigneeID))
+}
+
+func telegramProjectName(ctx context.Context, queries *db.Queries, issue db.Issue) string {
+	if !issue.ProjectID.Valid {
+		return ""
+	}
+	project, err := queries.GetProject(ctx, issue.ProjectID)
+	if err != nil || strings.TrimSpace(project.Title) == "" {
+		return ""
+	}
+	return project.Title
+}
+
+func telegramDueDateDisplay(issue db.Issue) string {
+	if !issue.DueDate.Valid {
+		return ""
+	}
+	return issue.DueDate.Time.UTC().Format("2006-01-02")
+}
+
 func buildTelegramInput(
 	ctx context.Context,
 	queries *db.Queries,
@@ -315,6 +404,9 @@ func buildTelegramInput(
 		IssueID:       util.UUIDToString(issue.ID),
 		Title:         issue.Title,
 		ActorName:     telegramActorDisplayName(ctx, queries, actorType, actorID),
+		AssigneeName:  telegramAssigneeDisplayName(ctx, queries, issue),
+		ProjectName:   telegramProjectName(ctx, queries, issue),
+		DueDate:       telegramDueDateDisplay(issue),
 		Preview:       preview,
 	}
 }
