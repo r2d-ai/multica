@@ -1,6 +1,10 @@
+import type { ReactNode } from "react";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { I18nProvider } from "@multica/core/i18n/react";
+import enCommon from "../../locales/en/common.json";
+import enSettings from "../../locales/en/settings.json";
 
 const {
   mockUpdateWorkspace,
@@ -78,6 +82,18 @@ vi.mock("sonner", () => ({
 
 import { IntegrationsTab } from "./integrations-tab";
 
+const TEST_RESOURCES = {
+  en: { common: enCommon, settings: enSettings },
+};
+
+function I18nWrapper({ children }: { children: ReactNode }) {
+  return (
+    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+      {children}
+    </I18nProvider>
+  );
+}
+
 describe("IntegrationsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -86,7 +102,7 @@ describe("IntegrationsTab", () => {
 
   it("merges Telegram settings into existing workspace settings on save", async () => {
     const user = userEvent.setup();
-    render(<IntegrationsTab />);
+    render(<IntegrationsTab />, { wrapper: I18nWrapper });
 
     const botTokenInput = screen.getByDisplayValue("old-token");
     const userIdInput = screen.getByDisplayValue("old-user");
@@ -113,7 +129,7 @@ describe("IntegrationsTab", () => {
 
   it("includes notify_reactions false when reaction toggle is off", async () => {
     const user = userEvent.setup();
-    render(<IntegrationsTab />);
+    render(<IntegrationsTab />, { wrapper: I18nWrapper });
 
     const reactionSwitch = screen.getByRole("switch");
     await user.click(reactionSwitch);
