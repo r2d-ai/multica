@@ -577,6 +577,15 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 			notifyMentionedMembers(bus, queries, e, mentions, issue.ID, issue.Title, issue.Status,
 				issue.Title, skip, emptyDetails)
 		}
+
+		issueRow, err := queries.GetIssue(ctx, parseUUID(issue.ID))
+		if err != nil {
+			slog.Error("telegram issue created notification: failed to get issue",
+				"issue_id", issue.ID, "error", err)
+		} else {
+			in := buildTelegramInput(ctx, queries, e.WorkspaceID, issueRow, e.ActorType, e.ActorID, "")
+			sendWorkspaceTelegramHTML(ctx, queries, e.WorkspaceID, formatTelegramCreatedHTML(in))
+		}
 	})
 
 	// issue:updated — handle assignee changes, status changes, priority, due date
