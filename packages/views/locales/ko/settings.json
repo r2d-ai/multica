@@ -173,7 +173,21 @@
     "section_title": "연동",
     "empty_title": "아직 서드파티 연동이 없습니다",
     "empty_description": "Slack, Linear 등 연동이 연결되면 여기에 표시됩니다. GitHub는 별도 탭으로 이동했습니다.",
-    "manage_hint": "관리자와 소유자만 연동을 관리할 수 있습니다."
+    "manage_hint": "관리자와 소유자만 연동을 관리할 수 있습니다.",
+    "telegram": {
+      "title": "Telegram",
+      "description": "댓글, 상태 변경, 반응에 대한 워크스페이스 Telegram 알림을 보냅니다.",
+      "bot_token_label": "Bot token",
+      "user_id_label": "User ID",
+      "notify_reactions_label": "반응 알림 보내기",
+      "notify_reactions_hint": "누군가 이슈나 댓글에 반응하면 Telegram으로 알립니다.",
+      "validation_error": "Telegram bot token과 User ID를 모두 입력하거나, 두 필드를 모두 비워 주세요.",
+      "partial_config_error": "Telegram 알림을 사용하려면 bot token과 User ID가 모두 필요합니다.",
+      "save": "저장",
+      "saving": "저장 중...",
+      "toast_saved": "Telegram 알림이 저장되었습니다",
+      "toast_save_failed": "Telegram 알림 저장에 실패했습니다"
+    }
   },
   "github": {
     "page_description": "GitHub App을 연결하고, Pull request가 Multica 안에서 표시되는 방식을 제어하며, 에이전트가 커밋 기록에 남기는 정보를 설정합니다.",
