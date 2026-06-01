@@ -46,7 +46,18 @@
     "no_archived": "No archived agents yet.",
     "search_active": "No agents match \"{{query}}\".",
     "search_active_filtered": "No agents match \"{{query}}\" in this filter.",
-    "no_filter_match": "No agents match this filter."
+    "no_filter_match": "No agents match this filter.",
+    "search_runtime_filtered": "No agents on \"{{machine}}\" match \"{{query}}\".",
+    "runtime_filtered": "No agents on \"{{machine}}\"."
+  },
+  "runtime_filter": {
+    "all": "All runtimes",
+    "section_local": "Local",
+    "section_remote": "Remote",
+    "section_cloud": "Cloud",
+    "agent_count_one": "{{count}} agent",
+    "agent_count_other": "{{count}} agents",
+    "empty": "No machines yet"
   },
   "columns": {
     "agent": "Agent",

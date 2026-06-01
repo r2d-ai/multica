@@ -46,7 +46,17 @@
     "no_archived": "还没有已归档智能体。",
     "search_active": "没有智能体匹配\"{{query}}\"。",
     "search_active_filtered": "在该筛选下没有智能体匹配\"{{query}}\"。",
-    "no_filter_match": "该筛选下没有匹配的智能体。"
+    "no_filter_match": "该筛选下没有匹配的智能体。",
+    "search_runtime_filtered": "\"{{machine}}\"上没有匹配\"{{query}}\"的智能体。",
+    "runtime_filtered": "\"{{machine}}\"上还没有智能体。"
+  },
+  "runtime_filter": {
+    "all": "全部运行时",
+    "section_local": "本机",
+    "section_remote": "远程",
+    "section_cloud": "云端",
+    "agent_count_other": "{{count}} 个智能体",
+    "empty": "还没有机器"
   },
   "columns": {
     "agent": "智能体",

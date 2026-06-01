@@ -46,7 +46,18 @@
     "no_archived": "아직 보관된 에이전트가 없습니다.",
     "search_active": "\"{{query}}\"와 일치하는 에이전트가 없습니다.",
     "search_active_filtered": "이 필터에서 \"{{query}}\"와 일치하는 에이전트가 없습니다.",
-    "no_filter_match": "이 필터와 일치하는 에이전트가 없습니다."
+    "no_filter_match": "이 필터와 일치하는 에이전트가 없습니다.",
+    "search_runtime_filtered": "\"{{machine}}\"에서 \"{{query}}\"와 일치하는 에이전트가 없습니다.",
+    "runtime_filtered": "\"{{machine}}\"에 에이전트가 없습니다."
+  },
+  "runtime_filter": {
+    "all": "모든 런타임",
+    "section_local": "로컬",
+    "section_remote": "원격",
+    "section_cloud": "클라우드",
+    "agent_count_one": "에이전트 {{count}}개",
+    "agent_count_other": "에이전트 {{count}}개",
+    "empty": "아직 기기가 없습니다"
   },
   "columns": {
     "agent": "에이전트",
