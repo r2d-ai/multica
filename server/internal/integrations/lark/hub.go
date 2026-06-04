@@ -336,6 +336,13 @@ func (h *Hub) Run(ctx context.Context) {
 // returns once those deadlines elapse.
 func (h *Hub) Wait() {
 	h.wg.Wait()
+	// Supervisors (and thus inbound delivery) have stopped, so no new
+	// run triggers can be scheduled. Drain the debounced pending triggers
+	// before joining replies: the flush may itself emit an offline/archived
+	// notice, and FlushPendingRuns blocks until those finish.
+	if h.dispatcher != nil {
+		h.dispatcher.FlushPendingRuns()
+	}
 	h.replyWg.Wait()
 }
 

@@ -151,6 +151,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		TrustedProxies:           parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
 		CloudRuntimeFleetURL:     cloudRuntimeFleetURLFromEnv(),
 		CloudRuntimeFleetTimeout: envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
+		AttachmentDownloadMode:   os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
+		AttachmentDownloadURLTTL: envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	h.Metrics = opts.BusinessMetrics
@@ -235,7 +237,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					Audit:        auditLogger,
 					IssueService: h.IssueService,
 					TaskService:  h.TaskService,
+					Logger:       slog.Default(),
 				}
+				// Debounce the per-session run trigger so a burst of
+				// messages (e.g. "forward a transcript, then type a note")
+				// collapses into one agent run instead of one per message.
+				// MUL-2968.
+				dispatcher.EnableRunBatching(lark.DefaultChatRunBatchWindow)
 
 				// WS Hub: lease + supervisor goroutines per installation.
 				// The WSLongConnConnector talks Lark's long-conn protocol
@@ -250,7 +258,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				// inbound messages will be silently dropped until the
 				// config is fixed, with the boot log labelling the mode
 				// "noop" so operators can spot it.
-				connectorFactory, connectorLabel := buildLarkConnectorFactory(installSvc)
+				connectorFactory, connectorLabel := buildLarkConnectorFactory(installSvc, larkClient)
 				h.LarkHub = lark.NewHub(queries, connectorFactory, dispatcher, lark.HubConfig{})
 
 				// OutcomeReplier wires the outbound side of the
@@ -271,6 +279,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					Logger:      slog.Default(),
 				})
 				h.LarkHub.SetOutcomeReplier(replier)
+				// The agent-offline / agent-archived notice is now decided
+				// at debounce-flush time rather than synchronously from
+				// Handle, so the dispatcher drives that reply itself through
+				// the same replier. MUL-2968.
+				dispatcher.FlushReply = replier.Reply
 				slog.Info("lark inbound pipeline wired", "connector", connectorLabel)
 
 				// One-shot union_id backfill for installations created
@@ -755,6 +768,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Attachments
 			r.Get("/api/attachments/{id}", h.GetAttachmentByID)
+			r.Get("/api/attachments/{id}/download", h.DownloadAttachment)
 			r.Get("/api/attachments/{id}/content", h.GetAttachmentContent)
 			r.Delete("/api/attachments/{id}", h.DeleteAttachment)
 
@@ -943,7 +957,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 //
 // Returns the factory plus a short label for the boot log: "ws" in
 // the healthy case, "noop" in the fallback case.
-func buildLarkConnectorFactory(installSvc *lark.InstallationService) (lark.ConnectorFactory, string) {
+func buildLarkConnectorFactory(installSvc *lark.InstallationService, apiClient lark.APIClient) (lark.ConnectorFactory, string) {
 	endpointFetcher, err := lark.NewHTTPConnectionTokenFetcher(lark.HTTPConnectionTokenConfig{
 		BaseURL: strings.TrimSpace(os.Getenv("MULTICA_LARK_CALLBACK_BASE_URL")),
 		Logger:  slog.Default(),
@@ -968,10 +982,16 @@ func buildLarkConnectorFactory(installSvc *lark.InstallationService) (lark.Conne
 		}
 		return creds, nil
 	})
+	// Inbound enricher: expands quoted replies / forwarded bundles into
+	// the agent's body via the IM API before dispatch. It shares the
+	// connector's resolved credentials and runs under the connector's
+	// EnrichTimeout so it cannot overrun the Lark long-conn ACK budget.
+	enricher := lark.NewInboundEnricher(apiClient, lark.InboundEnricherConfig{Logger: slog.Default()})
 	conn, err := lark.NewWSLongConnConnector(lark.WSConnectorConfig{
 		Dialer:              dialer,
 		EndpointFetcher:     endpointFetcher,
 		FrameDecoder:        decoder,
+		Enricher:            enricher,
 		CredentialsProvider: credsProvider,
 		Logger:              slog.Default(),
 	})
