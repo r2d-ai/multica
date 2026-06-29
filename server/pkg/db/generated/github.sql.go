@@ -205,6 +205,95 @@ func (q *Queries) GetGitHubInstallationByInstallationID(ctx context.Context, ins
 	return i, err
 }
 
+const getGitHubPRActivityByExternalID = `-- name: GetGitHubPRActivityByExternalID :one
+SELECT id, workspace_id, pull_request_id, issue_id, event_kind, github_external_id, action, github_thread_id, review_state, body_hash, actor_login, actor_type, github_url, comment_id, thread_root_comment_id, resolved, created_at, updated_at FROM github_pr_activity
+WHERE workspace_id = $1
+  AND issue_id = $2
+  AND event_kind = $3
+  AND github_external_id = $4
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetGitHubPRActivityByExternalIDParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	IssueID          pgtype.UUID `json:"issue_id"`
+	EventKind        string      `json:"event_kind"`
+	GithubExternalID int64       `json:"github_external_id"`
+}
+
+func (q *Queries) GetGitHubPRActivityByExternalID(ctx context.Context, arg GetGitHubPRActivityByExternalIDParams) (GithubPrActivity, error) {
+	row := q.db.QueryRow(ctx, getGitHubPRActivityByExternalID,
+		arg.WorkspaceID,
+		arg.IssueID,
+		arg.EventKind,
+		arg.GithubExternalID,
+	)
+	var i GithubPrActivity
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.PullRequestID,
+		&i.IssueID,
+		&i.EventKind,
+		&i.GithubExternalID,
+		&i.Action,
+		&i.GithubThreadID,
+		&i.ReviewState,
+		&i.BodyHash,
+		&i.ActorLogin,
+		&i.ActorType,
+		&i.GithubUrl,
+		&i.CommentID,
+		&i.ThreadRootCommentID,
+		&i.Resolved,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getGitHubPRActivityByThreadComment = `-- name: GetGitHubPRActivityByThreadComment :one
+SELECT id, workspace_id, pull_request_id, issue_id, event_kind, github_external_id, action, github_thread_id, review_state, body_hash, actor_login, actor_type, github_url, comment_id, thread_root_comment_id, resolved, created_at, updated_at FROM github_pr_activity
+WHERE pull_request_id = $1
+  AND issue_id = $2
+  AND event_kind = 'pull_request_review_comment'
+  AND github_external_id = $3
+LIMIT 1
+`
+
+type GetGitHubPRActivityByThreadCommentParams struct {
+	PullRequestID    pgtype.UUID `json:"pull_request_id"`
+	IssueID          pgtype.UUID `json:"issue_id"`
+	GithubExternalID int64       `json:"github_external_id"`
+}
+
+func (q *Queries) GetGitHubPRActivityByThreadComment(ctx context.Context, arg GetGitHubPRActivityByThreadCommentParams) (GithubPrActivity, error) {
+	row := q.db.QueryRow(ctx, getGitHubPRActivityByThreadComment, arg.PullRequestID, arg.IssueID, arg.GithubExternalID)
+	var i GithubPrActivity
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.PullRequestID,
+		&i.IssueID,
+		&i.EventKind,
+		&i.GithubExternalID,
+		&i.Action,
+		&i.GithubThreadID,
+		&i.ReviewState,
+		&i.BodyHash,
+		&i.ActorLogin,
+		&i.ActorType,
+		&i.GithubUrl,
+		&i.CommentID,
+		&i.ThreadRootCommentID,
+		&i.Resolved,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getGitHubPullRequest = `-- name: GetGitHubPullRequest :one
 SELECT id, workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, created_at, updated_at, head_sha, mergeable_state, additions, deletions, changed_files FROM github_pull_request
 WHERE workspace_id = $1 AND repo_owner = $2 AND repo_name = $3 AND pr_number = $4
@@ -295,6 +384,85 @@ func (q *Queries) GetPendingGitHubInstallation(ctx context.Context, installation
 		&i.AccountType,
 		&i.AccountAvatarUrl,
 		&i.ReceivedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertGitHubPRActivity = `-- name: InsertGitHubPRActivity :one
+
+INSERT INTO github_pr_activity (
+    workspace_id, pull_request_id, issue_id, event_kind, github_external_id, action,
+    github_thread_id, review_state, body_hash, actor_login, actor_type, github_url,
+    comment_id, thread_root_comment_id, resolved
+) VALUES (
+    $1, $2, $3, $4, $5, $6,
+    $8, $9, $10,
+    $11, $12, $13,
+    $14, $15, $7
+)
+ON CONFLICT (workspace_id, issue_id, event_kind, github_external_id, action) DO NOTHING
+RETURNING id, workspace_id, pull_request_id, issue_id, event_kind, github_external_id, action, github_thread_id, review_state, body_hash, actor_login, actor_type, github_url, comment_id, thread_root_comment_id, resolved, created_at, updated_at
+`
+
+type InsertGitHubPRActivityParams struct {
+	WorkspaceID         pgtype.UUID `json:"workspace_id"`
+	PullRequestID       pgtype.UUID `json:"pull_request_id"`
+	IssueID             pgtype.UUID `json:"issue_id"`
+	EventKind           string      `json:"event_kind"`
+	GithubExternalID    int64       `json:"github_external_id"`
+	Action              string      `json:"action"`
+	Resolved            bool        `json:"resolved"`
+	GithubThreadID      pgtype.Int8 `json:"github_thread_id"`
+	ReviewState         pgtype.Text `json:"review_state"`
+	BodyHash            pgtype.Text `json:"body_hash"`
+	ActorLogin          pgtype.Text `json:"actor_login"`
+	ActorType           pgtype.Text `json:"actor_type"`
+	GithubUrl           pgtype.Text `json:"github_url"`
+	CommentID           pgtype.UUID `json:"comment_id"`
+	ThreadRootCommentID pgtype.UUID `json:"thread_root_comment_id"`
+}
+
+// =====================
+// GitHub PR activity (dedupe + thread mapping)
+// =====================
+func (q *Queries) InsertGitHubPRActivity(ctx context.Context, arg InsertGitHubPRActivityParams) (GithubPrActivity, error) {
+	row := q.db.QueryRow(ctx, insertGitHubPRActivity,
+		arg.WorkspaceID,
+		arg.PullRequestID,
+		arg.IssueID,
+		arg.EventKind,
+		arg.GithubExternalID,
+		arg.Action,
+		arg.Resolved,
+		arg.GithubThreadID,
+		arg.ReviewState,
+		arg.BodyHash,
+		arg.ActorLogin,
+		arg.ActorType,
+		arg.GithubUrl,
+		arg.CommentID,
+		arg.ThreadRootCommentID,
+	)
+	var i GithubPrActivity
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.PullRequestID,
+		&i.IssueID,
+		&i.EventKind,
+		&i.GithubExternalID,
+		&i.Action,
+		&i.GithubThreadID,
+		&i.ReviewState,
+		&i.BodyHash,
+		&i.ActorLogin,
+		&i.ActorType,
+		&i.GithubUrl,
+		&i.CommentID,
+		&i.ThreadRootCommentID,
+		&i.Resolved,
+		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
@@ -543,6 +711,72 @@ func (q *Queries) ListPullRequestsByIssue(ctx context.Context, issueID pgtype.UU
 	return items, nil
 }
 
+const markGitHubPRActivityResolved = `-- name: MarkGitHubPRActivityResolved :one
+UPDATE github_pr_activity
+SET resolved = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, pull_request_id, issue_id, event_kind, github_external_id, action, github_thread_id, review_state, body_hash, actor_login, actor_type, github_url, comment_id, thread_root_comment_id, resolved, created_at, updated_at
+`
+
+type MarkGitHubPRActivityResolvedParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Resolved bool        `json:"resolved"`
+}
+
+func (q *Queries) MarkGitHubPRActivityResolved(ctx context.Context, arg MarkGitHubPRActivityResolvedParams) (GithubPrActivity, error) {
+	row := q.db.QueryRow(ctx, markGitHubPRActivityResolved, arg.ID, arg.Resolved)
+	var i GithubPrActivity
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.PullRequestID,
+		&i.IssueID,
+		&i.EventKind,
+		&i.GithubExternalID,
+		&i.Action,
+		&i.GithubThreadID,
+		&i.ReviewState,
+		&i.BodyHash,
+		&i.ActorLogin,
+		&i.ActorType,
+		&i.GithubUrl,
+		&i.CommentID,
+		&i.ThreadRootCommentID,
+		&i.Resolved,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setGitHubPRActivityThreadIDForComment = `-- name: SetGitHubPRActivityThreadIDForComment :exec
+UPDATE github_pr_activity
+SET github_thread_id = $3,
+    updated_at = now()
+WHERE pull_request_id = $1
+  AND issue_id = $2
+  AND event_kind = 'pull_request_review_comment'
+  AND github_external_id = $4
+`
+
+type SetGitHubPRActivityThreadIDForCommentParams struct {
+	PullRequestID    pgtype.UUID `json:"pull_request_id"`
+	IssueID          pgtype.UUID `json:"issue_id"`
+	GithubThreadID   pgtype.Int8 `json:"github_thread_id"`
+	GithubExternalID int64       `json:"github_external_id"`
+}
+
+func (q *Queries) SetGitHubPRActivityThreadIDForComment(ctx context.Context, arg SetGitHubPRActivityThreadIDForCommentParams) error {
+	_, err := q.db.Exec(ctx, setGitHubPRActivityThreadIDForComment,
+		arg.PullRequestID,
+		arg.IssueID,
+		arg.GithubThreadID,
+		arg.GithubExternalID,
+	)
+	return err
+}
+
 const unlinkIssueFromPullRequest = `-- name: UnlinkIssueFromPullRequest :exec
 DELETE FROM issue_pull_request
 WHERE issue_id = $1 AND pull_request_id = $2
@@ -556,6 +790,54 @@ type UnlinkIssueFromPullRequestParams struct {
 func (q *Queries) UnlinkIssueFromPullRequest(ctx context.Context, arg UnlinkIssueFromPullRequestParams) error {
 	_, err := q.db.Exec(ctx, unlinkIssueFromPullRequest, arg.IssueID, arg.PullRequestID)
 	return err
+}
+
+const updateGitHubPRActivityCommentMapping = `-- name: UpdateGitHubPRActivityCommentMapping :one
+UPDATE github_pr_activity
+SET comment_id = $2,
+    thread_root_comment_id = COALESCE($3, thread_root_comment_id),
+    github_thread_id = COALESCE($4, github_thread_id),
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, pull_request_id, issue_id, event_kind, github_external_id, action, github_thread_id, review_state, body_hash, actor_login, actor_type, github_url, comment_id, thread_root_comment_id, resolved, created_at, updated_at
+`
+
+type UpdateGitHubPRActivityCommentMappingParams struct {
+	ID                  pgtype.UUID `json:"id"`
+	CommentID           pgtype.UUID `json:"comment_id"`
+	ThreadRootCommentID pgtype.UUID `json:"thread_root_comment_id"`
+	GithubThreadID      pgtype.Int8 `json:"github_thread_id"`
+}
+
+func (q *Queries) UpdateGitHubPRActivityCommentMapping(ctx context.Context, arg UpdateGitHubPRActivityCommentMappingParams) (GithubPrActivity, error) {
+	row := q.db.QueryRow(ctx, updateGitHubPRActivityCommentMapping,
+		arg.ID,
+		arg.CommentID,
+		arg.ThreadRootCommentID,
+		arg.GithubThreadID,
+	)
+	var i GithubPrActivity
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.PullRequestID,
+		&i.IssueID,
+		&i.EventKind,
+		&i.GithubExternalID,
+		&i.Action,
+		&i.GithubThreadID,
+		&i.ReviewState,
+		&i.BodyHash,
+		&i.ActorLogin,
+		&i.ActorType,
+		&i.GithubUrl,
+		&i.CommentID,
+		&i.ThreadRootCommentID,
+		&i.Resolved,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const upsertGitHubPullRequest = `-- name: UpsertGitHubPullRequest :one
