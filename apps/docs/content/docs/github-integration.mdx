@@ -16,9 +16,10 @@ There is no per-issue setup. The whole flow is identifier-driven.
 | **Settings → GitHub** | Workspace admins see the GitHub tab with a master toggle, **Connect GitHub** button, and feature switches (PR sidebar, Co-authored-by, auto-link). After install you bounce back to the GitHub tab. |
 | **Issue sidebar → Pull requests** | Every PR auto-linked to this issue, with title, repo, state (`Open` / `Draft` / `Merged` / `Closed`), and author. Click a row to jump to the PR on GitHub. |
 | **Webhook (background)** | On every `pull_request` event, Multica upserts the PR row, scans the PR for issue identifiers, and (re)builds the link rows. Idempotent — replaying a delivery is a no-op. |
+| **PR activity sync** | On linked PRs only, mirrors actionable GitHub PR comments, reviews, and inline review comments into the issue timeline and wakes the assignee through the normal comment-trigger path. `approved` reviews are mirrored as informational notes without waking agents. |
 | **Auto-status on merge** | When a PR transitions to `merged`, every linked issue not already `Done` or `Cancelled` is moved to `Done`. The status change is timeline-logged with source `github_pr_merged`. |
 
-Only the PR itself is mirrored. Commits, branch refs without an open PR, and CI check states are **not** modeled. The integration is intentionally narrow.
+Only the PR itself is mirrored by default. Commits, branch refs without an open PR, and CI check states are **not** modeled for linking. **PR comments and reviews on already-linked PRs** are mirrored into the issue timeline (see [PR activity sync](#pr-activity-sync-on-linked-prs)).
 
 ## How identifiers are matched
 
@@ -47,10 +48,44 @@ Closing a PR **without** merging it only updates the PR card's state to `Closed`
 The action is attributed to the `system` actor on the timeline. Subscribers of the issue receive an inbox notification for the status change, the same way they would if a human had moved it.
 </Callout>
 
+## PR activity sync on linked PRs
+
+Once a PR is linked to an issue (via identifier auto-link or an existing `issue_pull_request` row), Multica mirrors **actionable** GitHub review activity into that issue's timeline:
+
+| GitHub event | Multica behavior |
+|---|---|
+| `issue_comment` (PR conversation tab) | Mirror + trigger when body passes noise filters |
+| `pull_request_review` (`changes_requested`, meaningful `commented`) | Mirror + trigger |
+| `pull_request_review` (`approved`) | Mirror as informational comment only — **does not** wake agents |
+| `pull_request_review_comment` (inline diff comments / replies) | Mirror + trigger; replies attach under the mirrored Multica thread when possible |
+| `pull_request_review_thread.resolved` | Auto-resolves the mapped Multica thread — **does not** wake agents |
+| `pull_request_review_thread.unresolved` | Reopens the mapped thread; triggers only when reopening a previously mirrored resolved thread |
+
+**Linked-PR-only gate:** if the PR row does not exist locally or has no `issue_pull_request` links, the webhook is acknowledged and ignored. Multica does **not** scan comment bodies for issue keys to route activity.
+
+**Multi-issue PRs:** actionable activity is mirrored to **every** linked issue, deduped per issue.
+
+### Noise filters (v1)
+
+Multica skips activity that is unlikely to need agent work:
+
+- Pure acknowledgements (`thanks`, `lgtm`, `ok`, `done`, `+1`, …)
+- Empty bodies (except `changes_requested`, which is actionable on state alone)
+- Common CI/status churn (`All checks have passed`, build summaries, Dependabot/Renovate noise, …)
+
+Bot comments are **not** blanket-ignored. A bot review with `changes_requested`, file/line feedback, or a non-acknowledgement body can still trigger — v1 uses content/state heuristics only (no bot allowlist).
+
+### Troubleshooting
+
+- **Comment on GitHub but nothing in Multica** — confirm the PR appears under **Pull requests** on the issue. Comments on unlinked PRs are intentionally ignored until the PR is linked.
+- **Approved review did not wake the agent** — expected. Approved reviews are timeline notes only.
+- **Duplicate GitHub delivery** — safe. Activity is deduped by GitHub comment/review/thread ID per issue.
+
 ## What's not auto-linked
 
-- **Identifiers in commit messages** — only branch / title / body are scanned. A commit titled `MUL-123: fix login` does not auto-link unless the same string also appears in the PR title or body.
-- **Identifiers in PR comments** — only the PR's own metadata is scanned; later GitHub comments are ignored.
+- **Identifiers in commit messages** — only branch / title / body are scanned for **linking**. A commit titled `MUL-123: fix login` does not auto-link unless the same string also appears in the PR title or body.
+- **PR comments on unlinked PRs** — activity sync requires an existing PR ↔ issue link. Put the issue key in the PR title/body/branch first, or wait for the `pull_request` webhook to link it.
+- **Identifiers in PR comments for routing** — comment text is never used to pick which issue receives activity; only the linked-PR gate applies.
 - **PRs in repos the App isn't installed on** — without the App, Multica never receives the webhook.
 - **Manually linking a PR to an issue** — there is no UI for this yet. If your team's convention puts identifiers in a place Multica isn't reading, add them to the PR title or body.
 
@@ -94,8 +129,9 @@ Fill in:
 | **Webhook URL** | `https://<api-host>/api/webhooks/github`. |
 | **Webhook secret** | Generate a long random string (e.g. `openssl rand -hex 32`). You'll paste the same value into Multica's env in step 2. |
 | **Permissions → Repository → Pull requests** | **Read-only**. |
+| **Permissions → Repository → Issues** | **Read-only** (required for `issue_comment` on PR conversations). |
 | **Permissions → Repository → Metadata** | Read-only (mandatory). |
-| **Subscribe to events** | Tick **Pull request**. |
+| **Subscribe to events** | Tick **Pull request**, **Issue comment**, **Pull request review**, **Pull request review comment**, and **Pull request review thread**. |
 | **Where can this GitHub App be installed?** | Your choice. `Only on this account` is fine for single-org setups. |
 
 After **Create GitHub App**, note two things from the App's detail page:
@@ -140,7 +176,7 @@ The integration ships its tables in migration `079_github_integration`. If you'r
 make migrate-up
 ```
 
-Three tables get created: `github_installation`, `github_pull_request`, `issue_pull_request`. They cascade-delete with their workspace, so removing a workspace cleans them up automatically.
+Three tables get created: `github_installation`, `github_pull_request`, `issue_pull_request`. Migration `128_github_pr_activity` adds `github_pr_activity` for dedupe and thread mapping. They cascade-delete with their workspace, so removing a workspace cleans them up automatically.
 
 ### 4. Connect from the UI
 
@@ -179,7 +215,7 @@ curl -i -X POST https://<api-host>/api/webhooks/github \
 A few rough edges to be aware of today:
 
 - **No manual link UI yet** — the only way to link a PR is to have the identifier in its branch, title, or body.
-- **No CI / check state** — only the PR itself is mirrored. Build status, review comments, and reviewers are not surfaced in Multica.
+- **CI / check state in sidebar** — check suite aggregation is mirrored for linked PR cards; review comment bodies and reviewers are surfaced via PR activity sync on the issue timeline, not a separate review panel.
 - **No workspace-level config** for the merge → Done rule — it's a fixed default (`merged → done`, unless `cancelled`). Workspace-customizable mappings are a future addition.
 - **Multi-PR-to-one-issue is conservative on merge** — if two PRs both reference `MUL-123` and the first one merges, the issue is moved to `Done` immediately. A follow-up change to wait for all linked PRs to resolve before advancing is in progress.
 

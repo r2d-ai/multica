@@ -276,3 +276,63 @@ ON CONFLICT (issue_id, pull_request_id) DO UPDATE SET
 -- name: UnlinkIssueFromPullRequest :exec
 DELETE FROM issue_pull_request
 WHERE issue_id = $1 AND pull_request_id = $2;
+
+-- =====================
+-- GitHub PR activity (dedupe + thread mapping)
+-- =====================
+
+-- name: InsertGitHubPRActivity :one
+INSERT INTO github_pr_activity (
+    workspace_id, pull_request_id, issue_id, event_kind, github_external_id, action,
+    github_thread_id, review_state, body_hash, actor_login, actor_type, github_url,
+    comment_id, thread_root_comment_id, resolved
+) VALUES (
+    $1, $2, $3, $4, $5, $6,
+    sqlc.narg('github_thread_id'), sqlc.narg('review_state'), sqlc.narg('body_hash'),
+    sqlc.narg('actor_login'), sqlc.narg('actor_type'), sqlc.narg('github_url'),
+    sqlc.narg('comment_id'), sqlc.narg('thread_root_comment_id'), $7
+)
+ON CONFLICT (workspace_id, issue_id, event_kind, github_external_id, action) DO NOTHING
+RETURNING *;
+
+-- name: GetGitHubPRActivityByExternalID :one
+SELECT * FROM github_pr_activity
+WHERE workspace_id = $1
+  AND issue_id = $2
+  AND event_kind = $3
+  AND github_external_id = $4
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: UpdateGitHubPRActivityCommentMapping :one
+UPDATE github_pr_activity
+SET comment_id = $2,
+    thread_root_comment_id = COALESCE(sqlc.narg('thread_root_comment_id'), thread_root_comment_id),
+    github_thread_id = COALESCE(sqlc.narg('github_thread_id'), github_thread_id),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: MarkGitHubPRActivityResolved :one
+UPDATE github_pr_activity
+SET resolved = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: GetGitHubPRActivityByThreadComment :one
+SELECT * FROM github_pr_activity
+WHERE pull_request_id = $1
+  AND issue_id = $2
+  AND event_kind = 'pull_request_review_comment'
+  AND github_external_id = $3
+LIMIT 1;
+
+-- name: SetGitHubPRActivityThreadIDForComment :exec
+UPDATE github_pr_activity
+SET github_thread_id = $3,
+    updated_at = now()
+WHERE pull_request_id = $1
+  AND issue_id = $2
+  AND event_kind = 'pull_request_review_comment'
+  AND github_external_id = $4;

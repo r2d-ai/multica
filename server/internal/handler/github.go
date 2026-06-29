@@ -630,6 +630,14 @@ func (h *Handler) HandleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		h.handlePullRequestEvent(ctx, body)
 	case "check_suite":
 		h.handleCheckSuiteEvent(ctx, body)
+	case "issue_comment":
+		h.handleIssueCommentEvent(ctx, body)
+	case "pull_request_review":
+		h.handlePullRequestReviewEvent(ctx, body)
+	case "pull_request_review_comment":
+		h.handlePullRequestReviewCommentEvent(ctx, body)
+	case "pull_request_review_thread":
+		h.handlePullRequestReviewThreadEvent(ctx, body)
 	default:
 		// Acknowledge every event so GitHub doesn't mark the endpoint failing,
 		// but ignore types we don't model.

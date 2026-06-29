@@ -398,6 +398,27 @@ type GithubPendingInstallation struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GithubPrActivity struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	PullRequestID       pgtype.UUID        `json:"pull_request_id"`
+	IssueID             pgtype.UUID        `json:"issue_id"`
+	EventKind           string             `json:"event_kind"`
+	GithubExternalID    int64              `json:"github_external_id"`
+	Action              string             `json:"action"`
+	GithubThreadID      pgtype.Int8        `json:"github_thread_id"`
+	ReviewState         pgtype.Text        `json:"review_state"`
+	BodyHash            pgtype.Text        `json:"body_hash"`
+	ActorLogin          pgtype.Text        `json:"actor_login"`
+	ActorType           pgtype.Text        `json:"actor_type"`
+	GithubUrl           pgtype.Text        `json:"github_url"`
+	CommentID           pgtype.UUID        `json:"comment_id"`
+	ThreadRootCommentID pgtype.UUID        `json:"thread_root_comment_id"`
+	Resolved            bool               `json:"resolved"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
 type GithubPullRequest struct {
 	ID              pgtype.UUID        `json:"id"`
 	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
