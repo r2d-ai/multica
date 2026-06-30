@@ -131,8 +131,8 @@ describe("IntegrationsTab", () => {
     render(<IntegrationsTab />, { wrapper: I18nWrapper });
 
     const switches = screen.getAllByRole("switch");
-    const reactionSwitch = switches[switches.length - 1];
-    await user.click(reactionSwitch);
+    expect(switches).toHaveLength(4);
+    await user.click(switches[3]!);
     await user.click(screen.getByRole("button", { name: /save/i }));
 
     expect(mockUpdateWorkspace).toHaveBeenCalledWith("ws-1", {
@@ -152,9 +152,10 @@ describe("IntegrationsTab", () => {
     render(<IntegrationsTab />, { wrapper: I18nWrapper });
 
     const switches = screen.getAllByRole("switch");
-    await user.click(switches[0]);
-    await user.click(switches[1]);
-    await user.click(switches[2]);
+    expect(switches).toHaveLength(4);
+    await user.click(switches[0]!);
+    await user.click(switches[1]!);
+    await user.click(switches[2]!);
     await user.click(screen.getByRole("button", { name: /save/i }));
 
     expect(mockUpdateWorkspace).toHaveBeenCalledWith("ws-1", {
