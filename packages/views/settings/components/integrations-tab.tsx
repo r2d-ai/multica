@@ -46,6 +46,15 @@ export function IntegrationsTab() {
   const [notifyReactions, setNotifyReactions] = useState(
     workspace?.settings.telegram?.notify_reactions !== false,
   );
+  const [notifyStatusChanges, setNotifyStatusChanges] = useState(
+    workspace?.settings.telegram?.notify_status_changes !== false,
+  );
+  const [notifyComments, setNotifyComments] = useState(
+    workspace?.settings.telegram?.notify_comments !== false,
+  );
+  const [notifyAgentActivity, setNotifyAgentActivity] = useState(
+    workspace?.settings.telegram?.notify_agent_activity !== false,
+  );
   const [saving, setSaving] = useState(false);
 
   const currentMember = members.find((m) => m.user_id === user?.id) ?? null;
@@ -74,6 +83,15 @@ export function IntegrationsTab() {
       };
       if (!notifyReactions) {
         telegram.notify_reactions = false;
+      }
+      if (!notifyStatusChanges) {
+        telegram.notify_status_changes = false;
+      }
+      if (!notifyComments) {
+        telegram.notify_comments = false;
+      }
+      if (!notifyAgentActivity) {
+        telegram.notify_agent_activity = false;
       }
       nextSettings.telegram = telegram;
     }
@@ -133,6 +151,54 @@ export function IntegrationsTab() {
                 onChange={(e) => setUserId(e.target.value)}
                 disabled={!canManageWorkspace}
                 className="mt-1"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-0.5 pr-4">
+                <p className="text-sm font-medium">
+                  {t(($) => $.integrations.telegram.notify_status_changes_label)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {t(($) => $.integrations.telegram.notify_status_changes_hint)}
+                </p>
+              </div>
+              <Switch
+                checked={notifyStatusChanges}
+                onCheckedChange={setNotifyStatusChanges}
+                disabled={!canManageWorkspace}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-0.5 pr-4">
+                <p className="text-sm font-medium">
+                  {t(($) => $.integrations.telegram.notify_comments_label)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {t(($) => $.integrations.telegram.notify_comments_hint)}
+                </p>
+              </div>
+              <Switch
+                checked={notifyComments}
+                onCheckedChange={setNotifyComments}
+                disabled={!canManageWorkspace}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-0.5 pr-4">
+                <p className="text-sm font-medium">
+                  {t(($) => $.integrations.telegram.notify_agent_activity_label)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {t(($) => $.integrations.telegram.notify_agent_activity_hint)}
+                </p>
+              </div>
+              <Switch
+                checked={notifyAgentActivity}
+                onCheckedChange={setNotifyAgentActivity}
+                disabled={!canManageWorkspace}
               />
             </div>
 

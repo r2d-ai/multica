@@ -101,6 +101,9 @@ func init() {
 	workspaceTelegramCmd.Flags().String("bot-token", "", "Telegram bot token")
 	workspaceTelegramCmd.Flags().String("user-id", "", "Telegram user ID / chat ID")
 	workspaceTelegramCmd.Flags().Bool("notify-reactions", false, "Send reaction notifications to Telegram (only applied when this flag is set)")
+	workspaceTelegramCmd.Flags().Bool("notify-status-changes", false, "Send status change notifications to Telegram (only applied when this flag is set)")
+	workspaceTelegramCmd.Flags().Bool("notify-comments", false, "Send comment notifications to Telegram (only applied when this flag is set)")
+	workspaceTelegramCmd.Flags().Bool("notify-agent-activity", false, "Send agent-created issue notifications to Telegram (only applied when this flag is set)")
 	workspaceTelegramCmd.Flags().Bool("clear", false, "Clear the Telegram configuration for this workspace")
 	workspaceTelegramCmd.Flags().String("output", "json", "Output format: table or json")
 }
@@ -535,12 +538,24 @@ func runWorkspaceTelegram(cmd *cobra.Command, args []string) error {
 			"bot_token": botToken,
 			"user_id":   userID,
 		}
-		if cmd.Flags().Changed("notify-reactions") {
-			notifyReactions, _ := cmd.Flags().GetBool("notify-reactions")
-			telegram["notify_reactions"] = notifyReactions
-		} else if prev, ok := settings["telegram"].(map[string]any); ok {
-			if v, exists := prev["notify_reactions"]; exists {
-				telegram["notify_reactions"] = v
+		prevTelegram, _ := settings["telegram"].(map[string]any)
+		telegramBoolFlags := []struct {
+			flagName string
+			jsonKey  string
+		}{
+			{"notify-reactions", "notify_reactions"},
+			{"notify-status-changes", "notify_status_changes"},
+			{"notify-comments", "notify_comments"},
+			{"notify-agent-activity", "notify_agent_activity"},
+		}
+		for _, field := range telegramBoolFlags {
+			if cmd.Flags().Changed(field.flagName) {
+				enabled, _ := cmd.Flags().GetBool(field.flagName)
+				telegram[field.jsonKey] = enabled
+			} else if prevTelegram != nil {
+				if v, exists := prevTelegram[field.jsonKey]; exists {
+					telegram[field.jsonKey] = v
+				}
 			}
 		}
 		nextSettings["telegram"] = telegram

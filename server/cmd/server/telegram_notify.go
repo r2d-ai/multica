@@ -49,9 +49,12 @@ type formatTelegramInput struct {
 }
 
 type telegramSettings struct {
-	BotToken        string `json:"bot_token"`
-	UserID          string `json:"user_id"`
-	NotifyReactions *bool  `json:"notify_reactions,omitempty"`
+	BotToken              string `json:"bot_token"`
+	UserID                string `json:"user_id"`
+	NotifyReactions       *bool  `json:"notify_reactions,omitempty"`
+	NotifyStatusChanges   *bool  `json:"notify_status_changes,omitempty"`
+	NotifyComments        *bool  `json:"notify_comments,omitempty"`
+	NotifyAgentActivity   *bool  `json:"notify_agent_activity,omitempty"`
 }
 
 type workspaceNotificationSettings struct {
@@ -168,11 +171,27 @@ func frontendOrigin() string {
 	return strings.TrimSpace(os.Getenv("FRONTEND_ORIGIN"))
 }
 
-func telegramReactionsEnabled(cfg *telegramSettings) bool {
-	if cfg == nil || cfg.NotifyReactions == nil {
+func telegramBoolEnabled(enabled *bool) bool {
+	if enabled == nil {
 		return true
 	}
-	return *cfg.NotifyReactions
+	return *enabled
+}
+
+func telegramReactionsEnabled(cfg *telegramSettings) bool {
+	return cfg != nil && telegramBoolEnabled(cfg.NotifyReactions)
+}
+
+func telegramStatusChangesEnabled(cfg *telegramSettings) bool {
+	return cfg != nil && telegramBoolEnabled(cfg.NotifyStatusChanges)
+}
+
+func telegramCommentsEnabled(cfg *telegramSettings) bool {
+	return cfg != nil && telegramBoolEnabled(cfg.NotifyComments)
+}
+
+func telegramAgentActivityEnabled(cfg *telegramSettings) bool {
+	return cfg != nil && telegramBoolEnabled(cfg.NotifyAgentActivity)
 }
 
 func truncateWithEllipsis(s string, max int) string {
