@@ -142,6 +142,8 @@ export type {
   AutopilotAssigneeType,
   AutopilotSubscriber,
   AutopilotSubscriberInput,
+  AutopilotCollaborator,
+  AutopilotCollaboratorsResponse,
   AutopilotTrigger,
   AutopilotTriggerKind,
   AutopilotRun,
