@@ -582,9 +582,11 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 		if err != nil {
 			slog.Error("telegram issue created notification: failed to get issue",
 				"issue_id", issue.ID, "error", err)
-		} else {
-			in := buildTelegramInput(ctx, queries, e.WorkspaceID, issueRow, e.ActorType, e.ActorID, "")
-			sendWorkspaceTelegramHTML(ctx, queries, e.WorkspaceID, formatTelegramCreatedHTML(in))
+		} else if cfg := workspaceTelegramConfig(ctx, queries, e.WorkspaceID); cfg != nil {
+			if e.ActorType != "agent" || telegramAgentActivityEnabled(cfg) {
+				in := buildTelegramInput(ctx, queries, e.WorkspaceID, issueRow, e.ActorType, e.ActorID, "")
+				sendWorkspaceTelegramHTML(ctx, queries, e.WorkspaceID, formatTelegramCreatedHTML(in))
+			}
 		}
 	})
 
@@ -683,7 +685,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 			if err != nil {
 				slog.Error("telegram status notification: failed to get issue",
 					"issue_id", issue.ID, "error", err)
-			} else {
+			} else if cfg := workspaceTelegramConfig(ctx, queries, e.WorkspaceID); cfg != nil && telegramStatusChangesEnabled(cfg) {
 				in := buildTelegramInput(ctx, queries, e.WorkspaceID, issueRow, e.ActorType, e.ActorID, "")
 				sendWorkspaceTelegramHTML(ctx, queries, e.WorkspaceID,
 					formatTelegramStatusHTML(in, prevStatus, issue.Status))
@@ -828,6 +830,10 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 		if err != nil {
 			slog.Error("telegram comment notification: failed to get issue",
 				"issue_id", issueID, "error", err)
+			return
+		}
+		cfg := workspaceTelegramConfig(ctx, queries, e.WorkspaceID)
+		if cfg == nil || !telegramCommentsEnabled(cfg) {
 			return
 		}
 		in := buildTelegramInput(ctx, queries, e.WorkspaceID, issueRow, e.ActorType, e.ActorID,

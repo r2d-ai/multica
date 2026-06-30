@@ -130,8 +130,9 @@ describe("IntegrationsTab", () => {
     const user = userEvent.setup();
     render(<IntegrationsTab />, { wrapper: I18nWrapper });
 
-    const reactionSwitch = screen.getByRole("switch");
-    await user.click(reactionSwitch);
+    const switches = screen.getAllByRole("switch");
+    expect(switches).toHaveLength(4);
+    await user.click(switches[3]!);
     await user.click(screen.getByRole("button", { name: /save/i }));
 
     expect(mockUpdateWorkspace).toHaveBeenCalledWith("ws-1", {
@@ -141,6 +142,31 @@ describe("IntegrationsTab", () => {
           bot_token: "old-token",
           user_id: "old-user",
           notify_reactions: false,
+        },
+      },
+    });
+  });
+
+  it("includes disabled notification filters when toggles are off", async () => {
+    const user = userEvent.setup();
+    render(<IntegrationsTab />, { wrapper: I18nWrapper });
+
+    const switches = screen.getAllByRole("switch");
+    expect(switches).toHaveLength(4);
+    await user.click(switches[0]!);
+    await user.click(switches[1]!);
+    await user.click(switches[2]!);
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(mockUpdateWorkspace).toHaveBeenCalledWith("ws-1", {
+      settings: {
+        existing: "kept",
+        telegram: {
+          bot_token: "old-token",
+          user_id: "old-user",
+          notify_status_changes: false,
+          notify_comments: false,
+          notify_agent_activity: false,
         },
       },
     });

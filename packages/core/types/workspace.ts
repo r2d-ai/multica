@@ -10,6 +10,12 @@ export interface WorkspaceTelegramSettings {
   user_id: string;
   /** When false, skip Telegram for reactions. Default: send. */
   notify_reactions?: boolean;
+  /** When false, skip Telegram for status changes. Default: send. */
+  notify_status_changes?: boolean;
+  /** When false, skip Telegram for comments. Default: send. */
+  notify_comments?: boolean;
+  /** When false, skip Telegram for agent-created issues. Default: send. */
+  notify_agent_activity?: boolean;
 }
 
 export interface WorkspaceSettings {

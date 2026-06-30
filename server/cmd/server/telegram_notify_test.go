@@ -39,6 +39,36 @@ func TestTelegramNotifyReactionsEnabled(t *testing.T) {
 	}
 }
 
+func TestTelegramNotifyStatusChangesEnabled(t *testing.T) {
+	cfg := &telegramSettings{BotToken: "t", UserID: "u", NotifyStatusChanges: boolPtr(false)}
+	if telegramStatusChangesEnabled(cfg) {
+		t.Fatal("expected disabled")
+	}
+	if !telegramStatusChangesEnabled(&telegramSettings{BotToken: "t", UserID: "u"}) {
+		t.Fatal("default should enable status changes")
+	}
+}
+
+func TestTelegramNotifyCommentsEnabled(t *testing.T) {
+	cfg := &telegramSettings{BotToken: "t", UserID: "u", NotifyComments: boolPtr(false)}
+	if telegramCommentsEnabled(cfg) {
+		t.Fatal("expected disabled")
+	}
+	if !telegramCommentsEnabled(&telegramSettings{BotToken: "t", UserID: "u"}) {
+		t.Fatal("default should enable comments")
+	}
+}
+
+func TestTelegramNotifyAgentActivityEnabled(t *testing.T) {
+	cfg := &telegramSettings{BotToken: "t", UserID: "u", NotifyAgentActivity: boolPtr(false)}
+	if telegramAgentActivityEnabled(cfg) {
+		t.Fatal("expected disabled")
+	}
+	if !telegramAgentActivityEnabled(&telegramSettings{BotToken: "t", UserID: "u"}) {
+		t.Fatal("default should enable agent activity")
+	}
+}
+
 func boolPtr(b bool) *bool { return &b }
 
 func TestParseTelegramSendResponseOKFalse(t *testing.T) {
