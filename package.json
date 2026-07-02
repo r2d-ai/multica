@@ -44,7 +44,7 @@
     "@types/node": "catalog:",
     "@types/pg": "^8.20.0",
     "pg": "^8.20.0",
-    "turbo": "^2.5.4",
+    "turbo": "^2.9.14",
     "typescript": "catalog:"
   }
 }
