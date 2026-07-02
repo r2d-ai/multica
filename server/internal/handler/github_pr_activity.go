@@ -199,13 +199,15 @@ func (h *Handler) resolveLinkedPRContext(ctx context.Context, installationID int
 	if installationID == 0 {
 		return out, false
 	}
-	inst, err := h.Queries.GetGitHubInstallationByInstallationID(ctx, installationID)
+	insts, err := h.Queries.ListGitHubInstallationsByInstallationID(ctx, installationID)
 	if err != nil {
-		if !errorsIsNoRows(err) {
-			slog.Warn("github: lookup installation failed", "err", err)
-		}
+		slog.Warn("github: lookup installation failed", "err", err)
 		return out, false
 	}
+	if len(insts) == 0 {
+		return out, false
+	}
+	inst := insts[0]
 	wsID := h.resolveWorkspaceForRepo(ctx, inst.WorkspaceID, inst.AccountLogin, repoOwner, repoName)
 	pr, err := h.Queries.GetGitHubPullRequest(ctx, db.GetGitHubPullRequestParams{
 		WorkspaceID: wsID,
