@@ -1,7 +1,12 @@
+// @vitest-environment jsdom
+
 import type { ReactNode } from "react";
-import { describe, expect, it, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { ApiError } from "@multica/core/api";
+import { configStore } from "@multica/core/config";
+import { COMPOSIO_MCP_APPS_FLAG } from "@multica/core/feature-flags";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enSettings from "../../locales/en/settings.json";
@@ -16,6 +21,13 @@ const {
   mockSetQueryData: vi.fn(),
   mockToastSuccess: vi.fn(),
   mockToastError: vi.fn(),
+}));
+
+const composioErrorRef = vi.hoisted(() => ({
+  current: null as Error | null,
+}));
+const queryCallsRef = vi.hoisted(() => ({
+  current: [] as { queryKey: unknown[]; enabled?: boolean }[],
 }));
 
 const workspace = {
@@ -38,7 +50,8 @@ const workspace = {
 };
 
 vi.mock("@multica/core/auth", () => ({
-  useAuthStore: (selector: (state: { user: { id: string } }) => unknown) => selector({ user: { id: "user-1" } }),
+  useAuthStore: (selector: (state: { user: { id: string } }) => unknown) =>
+    selector({ user: { id: "user-1" } }),
 }));
 
 vi.mock("@multica/core/hooks", () => ({
@@ -54,22 +67,41 @@ vi.mock("@multica/core/workspace/queries", () => ({
   workspaceKeys: { list: () => ["workspaces"] },
 }));
 
-vi.mock("@multica/core/api", () => ({
-  api: {
-    updateWorkspace: (...args: unknown[]) => mockUpdateWorkspace(...args),
-  },
+vi.mock("@multica/core/api", async () => {
+  const actual = await vi.importActual<typeof import("@multica/core/api")>("@multica/core/api");
+  return {
+    ...actual,
+    api: {
+      updateWorkspace: (...args: unknown[]) => mockUpdateWorkspace(...args),
+    },
+  };
+});
+
+vi.mock("@multica/core/composio", () => ({
+  composioToolkitsOptions: () => ({ queryKey: ["composio", "toolkits"] }),
 }));
 
 vi.mock("@tanstack/react-query", async () => {
   const actual = await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query");
   return {
     ...actual,
-    useQuery: () => ({
-      data: [{ user_id: "user-1", role: "owner" }],
-    }),
+    useQuery: (opts: { queryKey: unknown[]; enabled?: boolean }) => {
+      queryCallsRef.current.push(opts);
+      if (opts.queryKey[0] === "composio") {
+        return {
+          data: undefined,
+          error: opts.enabled === false ? null : composioErrorRef.current,
+          isError: opts.enabled !== false && composioErrorRef.current != null,
+        };
+      }
+      return {
+        data: [{ user_id: "user-1", role: "owner" }],
+      };
+    },
     useQueryClient: () => ({
       setQueryData: mockSetQueryData,
     }),
+    queryOptions: <T,>(opts: T) => opts,
   };
 });
 
@@ -78,6 +110,18 @@ vi.mock("sonner", () => ({
     success: mockToastSuccess,
     error: mockToastError,
   },
+}));
+
+vi.mock("./lark-tab", () => ({
+  LarkTab: () => <div data-testid="lark-tab" />,
+}));
+
+vi.mock("./composio-tab", () => ({
+  ComposioTab: () => <div data-testid="composio-tab" />,
+}));
+
+vi.mock("./slack-tab", () => ({
+  SlackTab: () => <div data-testid="slack-tab" />,
 }));
 
 import { IntegrationsTab } from "./integrations-tab";
@@ -94,15 +138,26 @@ function I18nWrapper({ children }: { children: ReactNode }) {
   );
 }
 
+function renderTab() {
+  return render(<IntegrationsTab />, { wrapper: I18nWrapper });
+}
+
+function composioQueryCall() {
+  return queryCallsRef.current.find((c) => c.queryKey[0] === "composio");
+}
+
 describe("IntegrationsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    queryCallsRef.current = [];
+    composioErrorRef.current = null;
     mockUpdateWorkspace.mockResolvedValue(workspace);
+    configStore.getState().setFeatureFlags({ [COMPOSIO_MCP_APPS_FLAG]: true });
   });
 
   it("merges Telegram settings into existing workspace settings on save", async () => {
     const user = userEvent.setup();
-    render(<IntegrationsTab />, { wrapper: I18nWrapper });
+    renderTab();
 
     const botTokenInput = screen.getByDisplayValue("old-token");
     const userIdInput = screen.getByDisplayValue("old-user");
@@ -128,7 +183,7 @@ describe("IntegrationsTab", () => {
 
   it("includes notify_reactions false when reaction toggle is off", async () => {
     const user = userEvent.setup();
-    render(<IntegrationsTab />, { wrapper: I18nWrapper });
+    renderTab();
 
     const switches = screen.getAllByRole("switch");
     expect(switches).toHaveLength(4);
@@ -149,7 +204,7 @@ describe("IntegrationsTab", () => {
 
   it("includes disabled notification filters when toggles are off", async () => {
     const user = userEvent.setup();
-    render(<IntegrationsTab />, { wrapper: I18nWrapper });
+    renderTab();
 
     const switches = screen.getAllByRole("switch");
     expect(switches).toHaveLength(4);
@@ -170,5 +225,29 @@ describe("IntegrationsTab", () => {
         },
       },
     });
+  });
+
+  it("hides Composio and disables the toolkits query when the feature flag is off", () => {
+    configStore.getState().setFeatureFlags({ [COMPOSIO_MCP_APPS_FLAG]: false });
+
+    renderTab();
+
+    expect(screen.queryByTestId("composio-tab")).toBeNull();
+    expect(composioQueryCall()?.enabled).toBe(false);
+  });
+
+  it("shows Composio when the feature flag is on and the integration is configured", () => {
+    renderTab();
+
+    expect(screen.getByTestId("composio-tab")).toBeInTheDocument();
+    expect(composioQueryCall()?.enabled).toBe(true);
+  });
+
+  it("hides Composio when the feature flag is on but the server reports 503", () => {
+    composioErrorRef.current = new ApiError("unavailable", 503, "Service Unavailable");
+
+    renderTab();
+
+    expect(screen.queryByTestId("composio-tab")).toBeNull();
   });
 });
