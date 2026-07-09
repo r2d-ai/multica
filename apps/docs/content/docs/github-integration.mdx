@@ -176,7 +176,7 @@ The integration ships its tables in migration `079_github_integration`. If you'r
 make migrate-up
 ```
 
-Three tables get created: `github_installation`, `github_pull_request`, `issue_pull_request`. Migration `128_github_pr_activity` adds `github_pr_activity` for dedupe and thread mapping. They cascade-delete with their workspace, so removing a workspace cleans them up automatically.
+Three tables get created: `github_installation`, `github_pull_request`, `issue_pull_request`. Migration `157_github_pr_activity` adds `github_pr_activity` for dedupe and thread mapping. They cascade-delete with their workspace, so removing a workspace cleans them up automatically.
 
 ### 4. Connect from the UI
 
