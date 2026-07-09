@@ -1,7 +1,6 @@
 -- GitHub PR activity dedupe + Multica comment/thread mapping for linked PRs.
 
-CREATE TABLE github_pr_activity (
-    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE IF NOT EXISTS github_pr_activity (    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id            UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
     pull_request_id         UUID NOT NULL REFERENCES github_pull_request(id) ON DELETE CASCADE,
     issue_id                UUID NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
@@ -28,7 +27,6 @@ CREATE TABLE github_pr_activity (
     UNIQUE (workspace_id, issue_id, event_kind, github_external_id, action)
 );
 
-CREATE INDEX idx_github_pr_activity_pr ON github_pr_activity(pull_request_id);
-CREATE INDEX idx_github_pr_activity_issue ON github_pr_activity(issue_id);
-CREATE INDEX idx_github_pr_activity_thread ON github_pr_activity(pull_request_id, github_thread_id)
-    WHERE github_thread_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_github_pr_activity_pr ON github_pr_activity(pull_request_id);
+CREATE INDEX IF NOT EXISTS idx_github_pr_activity_issue ON github_pr_activity(issue_id);
+CREATE INDEX IF NOT EXISTS idx_github_pr_activity_thread ON github_pr_activity(pull_request_id, github_thread_id)    WHERE github_thread_id IS NOT NULL;
