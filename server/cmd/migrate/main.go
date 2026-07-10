@@ -39,7 +39,7 @@ type preMigrationHook func(ctx context.Context, pool *pgxpool.Pool) error
 // `cmd/backfill_task_usage_hourly` exposes to operators.
 var preMigrationHooks = map[string]preMigrationHook{
 	"103_drop_legacy_daily_rollups": runTaskUsageHourlyHook,
-	"157_github_pr_activity":        runGitHubPRActivityRenameHook,
+	"9001_github_pr_activity":       runGitHubPRActivityRenameHook,
 }
 
 func runTaskUsageHourlyHook(ctx context.Context, pool *pgxpool.Pool) error {
@@ -62,12 +62,17 @@ func runTaskUsageHourlyHook(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 func runGitHubPRActivityRenameHook(ctx context.Context, pool *pgxpool.Pool) error {
-	// Renamed from 128_github_pr_activity after prefix 128 was frozen as a
-	// legacy duplicate set. Databases that applied the old version already have
-	// the table; remove stale bookkeeping so 157 can be recorded cleanly.
+	// Fork-local migration lives in the 9xxx band so upstream sequential
+	// prefixes never collide again. Prior names (128 → 157 → 161 → 9001):
+	// databases that already applied an older version have the table; remove
+	// stale bookkeeping so 9001 can be recorded cleanly.
 	tag, err := pool.Exec(ctx, `
 		DELETE FROM schema_migrations
-		WHERE version = '128_github_pr_activity'
+		WHERE version IN (
+			'128_github_pr_activity',
+			'157_github_pr_activity',
+			'161_github_pr_activity'
+		)
 		  AND EXISTS (
 			SELECT 1 FROM information_schema.tables
 			WHERE table_schema = current_schema() AND table_name = 'github_pr_activity'
@@ -78,7 +83,7 @@ func runGitHubPRActivityRenameHook(ctx context.Context, pool *pgxpool.Pool) erro
 	}
 	if tag.RowsAffected() > 0 {
 		slog.Info("github_pr_activity rename hook: removed stale schema_migrations entry",
-			"old_version", "128_github_pr_activity")
+			"rows_removed", tag.RowsAffected())
 	}
 	return nil
 }

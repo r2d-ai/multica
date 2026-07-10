@@ -1,3 +1,4 @@
+-- Fork-local (r2d): use 9xxx prefixes so upstream merges cannot steal the number.
 -- GitHub PR activity dedupe + Multica comment/thread mapping for linked PRs.
 
 CREATE TABLE IF NOT EXISTS github_pr_activity (    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
