@@ -1,7 +1,6 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plug } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, ApiError } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
@@ -14,14 +13,6 @@ import type { Workspace } from "@multica/core/types";
 import { memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@multica/ui/components/ui/empty";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { Switch } from "@multica/ui/components/ui/switch";
@@ -30,13 +21,14 @@ import { LarkTab } from "./lark-tab";
 import { ComposioTab } from "./composio-tab";
 import { SlackTab } from "./slack-tab";
 import { useT } from "../../i18n";
+import { SettingsSection, SettingsTab } from "./settings-layout";
 
 // Integrations is the umbrella tab for third-party platform connections.
 // GitHub has its own top-level tab (see github-tab.tsx); everything else
-// — currently Lark, Composio, and Slack, with Linear etc. to follow — lives in
-// here under its own section heading so additional integrations slot in without
-// changing the IA. IntegrationsTab is just the host; each integration owns its
-// own description and install flow.
+// — currently Telegram, Lark, Composio, and Slack, with Linear etc. to follow —
+// lives here under its own section heading so additional integrations slot in
+// without changing the IA. IntegrationsTab is just the host; each integration
+// owns its own description and install flow.
 export function IntegrationsTab() {
   const { t } = useT("settings");
   const wsId = useWorkspaceId();
@@ -128,19 +120,13 @@ export function IntegrationsTab() {
   };
 
   return (
-    <div className="space-y-8">
-      <section className="space-y-4">
-        <h2 className="text-sm font-semibold">{t(($) => $.integrations.section_title)}</h2>
-
+    <SettingsTab title={t(($) => $.page.tabs.integrations)}>
+      <SettingsSection
+        title={t(($) => $.integrations.telegram.title)}
+        description={t(($) => $.integrations.telegram.description)}
+      >
         <Card>
           <CardContent className="space-y-3 pt-6">
-            <div>
-              <h3 className="text-sm font-semibold">{t(($) => $.integrations.telegram.title)}</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                {t(($) => $.integrations.telegram.description)}
-              </p>
-            </div>
-
             <div>
               <Label className="text-xs text-muted-foreground">
                 {t(($) => $.integrations.telegram.bot_token_label)}
@@ -251,39 +237,19 @@ export function IntegrationsTab() {
             </div>
           </CardContent>
         </Card>
+      </SettingsSection>
 
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <Plug className="h-4 w-4" />
-            </EmptyMedia>
-            <EmptyTitle>{t(($) => $.integrations.empty_title)}</EmptyTitle>
-            <EmptyDescription>
-              {t(($) => $.integrations.empty_description)}
-            </EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <p className="text-xs text-muted-foreground">
-              {t(($) => $.integrations.manage_hint)}
-            </p>
-          </EmptyContent>
-        </Empty>
-      </section>
-
-      <section className="space-y-4">
-        <h2 className="text-sm font-semibold">{t(($) => $.lark.section_title)}</h2>
+      <SettingsSection title={t(($) => $.lark.section_title)}>
         <LarkTab />
-      </section>
+      </SettingsSection>
       {composioEnabled && !composioUnconfigured && (
-        <section className="space-y-4">
-          <h2 className="text-sm font-semibold">{t(($) => $.composio.section_title)}</h2>
+        <SettingsSection title={t(($) => $.composio.section_title)}>
           <ComposioTab />
-        </section>
+        </SettingsSection>
       )}
-      <section className="space-y-4">
-        <h2 className="text-sm font-semibold">{t(($) => $.slack.section_title)}</h2>
+      <SettingsSection title={t(($) => $.slack.section_title)}>
         <SlackTab />
-      </section>
-    </div>
+      </SettingsSection>
+    </SettingsTab>
   );
 }
