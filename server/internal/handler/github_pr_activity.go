@@ -122,13 +122,15 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, body []byte) {
 	if p.Action != "created" || p.Issue.PullRequest == nil {
 		return
 	}
-	linked, ok := h.resolveLinkedPRContext(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, p.Issue.Number)
-	if !ok {
+	linked := h.resolveLinkedPRContexts(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, p.Issue.Number)
+	if len(linked) == 0 {
 		slog.Info("github: skip issue_comment — PR not linked", "pr_number", p.Issue.Number)
 		return
 	}
-	for _, issueID := range linked.issueIDs {
-		h.mirrorIssueCommentToIssue(ctx, linked, issueID, p)
+	for _, ctxLinked := range linked {
+		for _, issueID := range ctxLinked.issueIDs {
+			h.mirrorIssueCommentToIssue(ctx, ctxLinked, issueID, p)
+		}
 	}
 }
 
@@ -145,13 +147,15 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, body []byte)
 	if state != "approved" && state != "changes_requested" && state != "commented" {
 		return
 	}
-	linked, ok := h.resolveLinkedPRContext(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, p.PullRequest.Number)
-	if !ok {
+	linked := h.resolveLinkedPRContexts(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, p.PullRequest.Number)
+	if len(linked) == 0 {
 		slog.Info("github: skip pull_request_review — PR not linked", "pr_number", p.PullRequest.Number)
 		return
 	}
-	for _, issueID := range linked.issueIDs {
-		h.mirrorPullRequestReviewToIssue(ctx, linked, issueID, p, state)
+	for _, ctxLinked := range linked {
+		for _, issueID := range ctxLinked.issueIDs {
+			h.mirrorPullRequestReviewToIssue(ctx, ctxLinked, issueID, p, state)
+		}
 	}
 }
 
@@ -164,13 +168,15 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, body 
 	if p.Action != "created" {
 		return
 	}
-	linked, ok := h.resolveLinkedPRContext(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, p.PullRequest.Number)
-	if !ok {
+	linked := h.resolveLinkedPRContexts(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, p.PullRequest.Number)
+	if len(linked) == 0 {
 		slog.Info("github: skip pull_request_review_comment — PR not linked", "pr_number", p.PullRequest.Number)
 		return
 	}
-	for _, issueID := range linked.issueIDs {
-		h.mirrorPullRequestReviewCommentToIssue(ctx, linked, issueID, p)
+	for _, ctxLinked := range linked {
+		for _, issueID := range ctxLinked.issueIDs {
+			h.mirrorPullRequestReviewCommentToIssue(ctx, ctxLinked, issueID, p)
+		}
 	}
 }
 
@@ -184,55 +190,63 @@ func (h *Handler) handlePullRequestReviewThreadEvent(ctx context.Context, body [
 	if action != "resolved" && action != "unresolved" {
 		return
 	}
-	linked, ok := h.resolveLinkedPRContext(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, p.PullRequest.Number)
-	if !ok {
+	linked := h.resolveLinkedPRContexts(ctx, p.Installation.ID, p.Repository.Owner.Login, p.Repository.Name, p.PullRequest.Number)
+	if len(linked) == 0 {
 		slog.Info("github: skip pull_request_review_thread — PR not linked", "pr_number", p.PullRequest.Number)
 		return
 	}
-	for _, issueID := range linked.issueIDs {
-		h.handlePullRequestReviewThreadForIssue(ctx, linked, issueID, p, action)
+	for _, ctxLinked := range linked {
+		for _, issueID := range ctxLinked.issueIDs {
+			h.handlePullRequestReviewThreadForIssue(ctx, ctxLinked, issueID, p, action)
+		}
 	}
 }
 
-func (h *Handler) resolveLinkedPRContext(ctx context.Context, installationID int64, repoOwner, repoName string, prNumber int32) (linkedPRContext, bool) {
-	var out linkedPRContext
+// resolveLinkedPRContexts finds linked PR mirrors across every workspace bound
+// to the GitHub App installation (MUL-4343 fan-out). resolveWorkspaceForRepo
+// was removed upstream; activity mirroring must not depend on the old
+// single-workspace registry route.
+func (h *Handler) resolveLinkedPRContexts(ctx context.Context, installationID int64, repoOwner, repoName string, prNumber int32) []linkedPRContext {
 	if installationID == 0 {
-		return out, false
+		return nil
 	}
 	insts, err := h.Queries.ListGitHubInstallationsByInstallationID(ctx, installationID)
 	if err != nil {
 		slog.Warn("github: lookup installation failed", "err", err)
-		return out, false
+		return nil
 	}
 	if len(insts) == 0 {
-		return out, false
+		return nil
 	}
-	inst := insts[0]
-	wsID := h.resolveWorkspaceForRepo(ctx, inst.WorkspaceID, inst.AccountLogin, repoOwner, repoName)
-	pr, err := h.Queries.GetGitHubPullRequest(ctx, db.GetGitHubPullRequestParams{
-		WorkspaceID: wsID,
-		RepoOwner:   repoOwner,
-		RepoName:    repoName,
-		PrNumber:    prNumber,
-	})
-	if err != nil {
-		if !errorsIsNoRows(err) {
-			slog.Warn("github: lookup pr for activity failed", "err", err)
+	out := make([]linkedPRContext, 0, len(insts))
+	for _, inst := range insts {
+		pr, err := h.Queries.GetGitHubPullRequest(ctx, db.GetGitHubPullRequestParams{
+			WorkspaceID: inst.WorkspaceID,
+			RepoOwner:   repoOwner,
+			RepoName:    repoName,
+			PrNumber:    prNumber,
+		})
+		if err != nil {
+			if !errorsIsNoRows(err) {
+				slog.Warn("github: lookup pr for activity failed", "err", err, "workspace_id", uuidToString(inst.WorkspaceID))
+			}
+			continue
 		}
-		return out, false
+		issueIDs, err := h.Queries.ListIssueIDsForPullRequest(ctx, pr.ID)
+		if err != nil {
+			slog.Warn("github: list linked issues failed", "err", err, "workspace_id", uuidToString(inst.WorkspaceID))
+			continue
+		}
+		if len(issueIDs) == 0 {
+			continue
+		}
+		out = append(out, linkedPRContext{
+			workspaceID: inst.WorkspaceID,
+			pr:          pr,
+			issueIDs:    issueIDs,
+		})
 	}
-	issueIDs, err := h.Queries.ListIssueIDsForPullRequest(ctx, pr.ID)
-	if err != nil {
-		slog.Warn("github: list linked issues failed", "err", err)
-		return out, false
-	}
-	if len(issueIDs) == 0 {
-		return out, false
-	}
-	out.workspaceID = wsID
-	out.pr = pr
-	out.issueIDs = issueIDs
-	return out, true
+	return out
 }
 
 func errorsIsNoRows(err error) bool {
