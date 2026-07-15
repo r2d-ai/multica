@@ -9,7 +9,6 @@ export interface TimelineItem {
   content?: string;
   input?: Record<string, unknown>;
   output?: string;
-  created_at?: string;
 }
 
 function canMergeStreamingText(prev: TimelineItem, next: TimelineItem): boolean {
@@ -27,7 +26,6 @@ export function coalesceTimelineItems(items: TimelineItem[]): TimelineItem[] {
       out[out.length - 1] = {
         ...prev,
         content: `${prev.content ?? ""}${item.content ?? ""}`,
-        created_at: item.created_at ?? prev.created_at,
       };
       continue;
     }
@@ -60,7 +58,6 @@ export function buildTimeline(msgs: TaskMessagePayload[]): TimelineItem[] {
       content: msg.content,
       input: msg.input,
       output: msg.output,
-      created_at: msg.created_at,
     });
   }
   return redactTimelineItems(coalesceTimelineItems(items));
