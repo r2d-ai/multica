@@ -8,6 +8,9 @@ export type {
   AgentInvocationTarget,
   AgentInvocationTargetInput,
   AgentTask,
+  TaskAttribution,
+  AttributionUser,
+  TaskEvidence,
   AgentActivityBucket,
   AgentRunCount,
   TaskFailureReason,
@@ -78,8 +81,10 @@ export type {
 } from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType, InboxWorkspaceUnread } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
-export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, Reaction } from "./comment";
+export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, CommentTriggerOutcome, CommentTriggerStatus, Reaction } from "./comment";
 export type { Label, LabelResourceType, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse, ResourceLabelsResponse } from "./label";
+export type { IssueProperty, IssuePropertyType, IssuePropertyOption, IssuePropertyConfig, IssuePropertyValue, IssuePropertyValues, CreatePropertyRequest, UpdatePropertyRequest, ListPropertiesResponse, IssuePropertiesResponse } from "./property";
+export { ISSUE_PROPERTY_TYPES, isKnownPropertyType } from "./property";
 export type {
   TimelineEntry,
   AssigneeFrequencyEntry,
@@ -102,6 +107,8 @@ export type {
   SendChatMessageResponse,
   CancelledChatMessage,
   CancelTaskResponse,
+  ChatDraftRestore,
+  ChatDraftRestoresResponse,
 } from "./chat";
 export type { StorageAdapter } from "./storage";
 export type {
