@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -340,6 +341,19 @@ func runRepoRemove(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// effectiveRepoCheckoutMode keeps the daemon's historical Windows isolation
+// contract while allowing Linux Codex tasks to use the shared bare cache as a
+// real linked worktree. Codex/Linux now runs with danger-full-access by default,
+// so forcing task-local Git metadata only multiplies large .git object stores
+// across task directories without providing sandbox protection.
+func effectiveRepoCheckoutMode(goos, configured string) string {
+	mode := strings.TrimSpace(configured)
+	if goos == "linux" && mode == "isolated" {
+		return ""
+	}
+	return mode
+}
+
 func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	repoURL := args[0]
 
@@ -369,7 +383,7 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 		"ref":           repoCheckoutRef,
 		"agent_name":    agentName,
 		"task_id":       taskID,
-		"checkout_mode": strings.TrimSpace(os.Getenv("MULTICA_REPO_CHECKOUT_MODE")),
+		"checkout_mode": effectiveRepoCheckoutMode(runtime.GOOS, os.Getenv("MULTICA_REPO_CHECKOUT_MODE")),
 		"retry_busy":    true,
 		"fresh":         repoCheckoutFresh,
 	}
