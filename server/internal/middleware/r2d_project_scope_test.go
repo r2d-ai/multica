@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -43,6 +44,59 @@ func TestR2DIssueOperation(t *testing.T) {
 		req := httptest.NewRequest(method, "http://example.test/api/issues/i", nil)
 		if got := r2dIssueOperation(req); got != r2dauth.OperationContribute {
 			t.Errorf("%s: operation=%q want contribute", method, got)
+		}
+	}
+}
+
+func TestR2DExplicitProjectGrant(t *testing.T) {
+	t.Parallel()
+	for _, role := range []string{"viewer", "member", "manager"} {
+		if !r2dExplicitProjectGrant(role) {
+			t.Errorf("valid explicit project role %q rejected", role)
+		}
+	}
+	for _, role := range []string{"", "owner", "admin", "global_observer"} {
+		if r2dExplicitProjectGrant(role) {
+			t.Errorf("non-project grant role %q accepted", role)
+		}
+	}
+}
+
+func TestR2DRawProjectRows(t *testing.T) {
+	t.Parallel()
+	rows, err := r2dRawProjectRows([]string{
+		`{"id":"p1","workspace_id":"w1","title":"one"}`,
+		`{"id":"p2","workspace_id":"w2","title":"two"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || !json.Valid(rows[0]) || !json.Valid(rows[1]) {
+		t.Fatalf("unexpected raw rows: %#v", rows)
+	}
+	if _, err := r2dRawProjectRows([]string{`{"id":`}); err == nil {
+		t.Fatal("invalid JSON row accepted")
+	}
+}
+
+func TestShouldR2DFilterCollection(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		method string
+		path   string
+		want   bool
+	}{
+		{http.MethodGet, "/api/projects", true},
+		{http.MethodGet, "/api/projects/search", true},
+		{http.MethodGet, "/api/issues", true},
+		{http.MethodGet, "/api/issues/search", true},
+		{http.MethodPost, "/api/projects", false},
+		{http.MethodGet, "/api/squads", false},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest(tt.method, "http://example.test"+tt.path, nil)
+		if got := shouldR2DFilterCollection(req); got != tt.want {
+			t.Errorf("%s %s: got %v want %v", tt.method, tt.path, got, tt.want)
 		}
 	}
 }
