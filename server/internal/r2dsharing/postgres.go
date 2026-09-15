@@ -69,15 +69,17 @@ ORDER BY g.created_at ASC, g.id ASC`, projectID)
 	out := make([]Grant, 0)
 	for rows.Next() {
 		var g Grant
+		var principalType string
 		var createdAt, updatedAt time.Time
 		var name, secondary, avatar string
 		if err := rows.Scan(
-			&g.ID, &g.ProjectID, &g.PrincipalType, &g.PrincipalID, &g.Role,
+			&g.ID, &g.ProjectID, &principalType, &g.PrincipalID, &g.Role,
 			&g.CreatedBy, &createdAt, &updatedAt,
 			&name, &secondary, &avatar,
 		); err != nil {
 			return nil, err
 		}
+		g.PrincipalType = PrincipalType(principalType)
 		g.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
 		g.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
 		if name != "" {
@@ -106,6 +108,7 @@ func (s *PostgresStore) PrincipalExists(ctx context.Context, principalType Princ
 }
 
 func (s *PostgresStore) CreateGrant(ctx context.Context, grant Grant) (Grant, error) {
+	var principalType string
 	var createdAt, updatedAt time.Time
 	err := s.db.QueryRow(ctx, `
 INSERT INTO r2d_project_grants (
@@ -115,7 +118,7 @@ ON CONFLICT (project_id, principal_type, principal_id) DO NOTHING
 RETURNING id, project_id, principal_type, principal_id, role, created_by, created_at, updated_at`,
 		grant.ID, grant.ProjectID, string(grant.PrincipalType), grant.PrincipalID, grant.Role, grant.CreatedBy,
 	).Scan(
-		&grant.ID, &grant.ProjectID, &grant.PrincipalType, &grant.PrincipalID,
+		&grant.ID, &grant.ProjectID, &principalType, &grant.PrincipalID,
 		&grant.Role, &grant.CreatedBy, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -124,6 +127,7 @@ RETURNING id, project_id, principal_type, principal_id, role, created_by, create
 	if err != nil {
 		return Grant{}, err
 	}
+	grant.PrincipalType = PrincipalType(principalType)
 	grant.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
 	grant.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
 	return grant, nil
@@ -131,6 +135,7 @@ RETURNING id, project_id, principal_type, principal_id, role, created_by, create
 
 func (s *PostgresStore) UpdateGrantRole(ctx context.Context, projectID, grantID, role string) (Grant, error) {
 	var g Grant
+	var principalType string
 	var createdAt, updatedAt time.Time
 	err := s.db.QueryRow(ctx, `
 UPDATE r2d_project_grants
@@ -139,7 +144,7 @@ WHERE project_id = $1 AND id = $2
 RETURNING id, project_id, principal_type, principal_id, role, created_by, created_at, updated_at`,
 		projectID, grantID, role,
 	).Scan(
-		&g.ID, &g.ProjectID, &g.PrincipalType, &g.PrincipalID,
+		&g.ID, &g.ProjectID, &principalType, &g.PrincipalID,
 		&g.Role, &g.CreatedBy, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -148,6 +153,7 @@ RETURNING id, project_id, principal_type, principal_id, role, created_by, create
 	if err != nil {
 		return Grant{}, err
 	}
+	g.PrincipalType = PrincipalType(principalType)
 	g.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
 	g.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
 	return g, nil
