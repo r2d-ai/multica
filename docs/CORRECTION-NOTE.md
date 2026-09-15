@@ -1,0 +1,1 @@
+This branch/PR was abandoned. The authoritative model is **Team = Workspace**, with cross-workspace Project ACL and workspace-scoped Squads. See PR #14 closure and tracker #12.
