@@ -24,10 +24,11 @@ func r2dUnfilteredIssueSurface(r *http.Request) bool {
 	if path == "/api/issues/search" {
 		return r.Method != http.MethodGet
 	}
-	if r.Method == http.MethodGet {
+	if r.Method == http.MethodPost {
 		switch path {
 		case "/api/issues/table/rows", "/api/issues/table/groups", "/api/issues/table/facets":
-			// P04-C2 compiles these from an ACL-native membership predicate.
+			// These POST endpoints are read-only query surfaces. P04-C2 compiles
+			// them from an ACL-native membership predicate.
 			return false
 		}
 	}
