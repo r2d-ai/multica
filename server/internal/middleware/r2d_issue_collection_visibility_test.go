@@ -23,7 +23,7 @@ func TestR2DApplyReadableProjectValuesDefaultScope(t *testing.T) {
 func TestR2DApplyReadableProjectValuesIntersectsExplicitFilter(t *testing.T) {
 	t.Parallel()
 	values := url.Values{
-		"project_ids":       []string{"p1,p2,p3"},
+		"project_ids":        []string{"p1,p2,p3"},
 		"include_no_project": []string{"false"},
 	}
 	r2dApplyReadableProjectValues(values, []string{"p2", "p4"})
