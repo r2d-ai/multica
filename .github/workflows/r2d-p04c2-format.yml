@@ -1,0 +1,26 @@
+name: r2d-p04c2-format
+
+on:
+  push:
+    branches:
+      - feat/p04-c2-issue-query-enforcement
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Format
+        run: gofmt -w server/internal/middleware server/internal/handler/r2d_issue_table_acl.go
+      - name: Commit format and remove workflow
+        run: |
+          rm .github/workflows/r2d-p04c2-format.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/internal/middleware server/internal/handler/r2d_issue_table_acl.go .github/workflows/r2d-p04c2-format.yml
+          git commit -m "style(acl): gofmt C2 middleware"
+          git push origin HEAD:${GITHUB_REF_NAME}
