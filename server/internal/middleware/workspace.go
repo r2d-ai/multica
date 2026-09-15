@@ -235,6 +235,11 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 			// Workspace boundary. Only the member-level middleware takes these
 			// paths; role-gated Workspace administration is never bypassed.
 			if len(roles) == 0 {
+				// GET-with-body Issue table scopes need the same pre-membership Project
+				// authorization as URL-scoped reads. Only explicit Project scopes widen.
+				if tryR2DIssueReadScope(queries, w, r, next, userID) {
+					return
+				}
 				// Body-aware Issue guards run first so a source Project grant cannot
 				// be abused to write into a destination Project or escape into
 				// projectless Workspace-private work.
