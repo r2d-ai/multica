@@ -52,3 +52,45 @@ func (h *Handler) r2dReadableWorkspaceProjectIDs(ctx context.Context, userID, wo
 	}
 	return ids, nil
 }
+
+func r2dProjectUUIDSet(ids []pgtype.UUID) map[string]struct{} {
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id.Valid {
+			set[util.UUIDToString(id)] = struct{}{}
+		}
+	}
+	return set
+}
+
+func r2dIssueProjectVisible(projectID pgtype.UUID, readable map[string]struct{}, allowProjectless bool) bool {
+	if !projectID.Valid {
+		return allowProjectless
+	}
+	_, ok := readable[util.UUIDToString(projectID)]
+	return ok
+}
+
+// r2dCanReadProjectlessIssues is used only by direct Issue-relative read paths
+// that can be reached through a foreign Project grant. Projectless work remains
+// Workspace-private, except for the deployment-level read-only observer role.
+func (h *Handler) r2dCanReadProjectlessIssues(ctx context.Context, userID, workspaceID string) (bool, error) {
+	userUUID, err := util.ParseUUID(userID)
+	if err != nil {
+		return false, err
+	}
+	workspaceUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return false, err
+	}
+	var allowed bool
+	err = h.DB.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM member
+    WHERE workspace_id = $1 AND user_id = $2
+) OR EXISTS (
+    SELECT 1 FROM r2d_global_roles
+    WHERE user_id = $2 AND role = 'global_observer'
+)`, workspaceUUID, userUUID).Scan(&allowed)
+	return allowed, err
+}
