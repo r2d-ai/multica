@@ -29,6 +29,16 @@ func tryR2DIssueReadScope(queries *db.Queries, w http.ResponseWriter, r *http.Re
 	if r.Method == http.MethodGet && r2dDirectIssueChildrenPath(path) {
 		return r2dServeDirectIssueChildren(queries, w, r, next, userID, path)
 	}
+	if r.Method == http.MethodGet && path == "/api/issues/search" {
+		projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+		if projectID == "" {
+			return false
+		}
+		if _, err := parseR2DUUID(projectID); err != nil {
+			return false // preserve the handler's canonical malformed-filter response
+		}
+		return r2dServeProjectSearch(queries, w, r, next, userID, projectID)
+	}
 	if r.Method == http.MethodGet && path == "/api/issues/grouped" {
 		projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
 		if projectID == "" {
