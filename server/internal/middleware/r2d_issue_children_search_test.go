@@ -93,6 +93,35 @@ func TestR2DFilterProjectSearchPage(t *testing.T) {
 	}
 }
 
+func TestR2DFilterWorkspaceSearchPage(t *testing.T) {
+	t.Parallel()
+	visibleID := "11111111-1111-1111-1111-111111111111"
+	hiddenID := "22222222-2222-2222-2222-222222222222"
+	rows := []json.RawMessage{
+		json.RawMessage(`{"id":"projectless","project_id":null}`),
+		json.RawMessage(`{"id":"visible","project_id":"` + visibleID + `"}`),
+		json.RawMessage(`{"id":"hidden","project_id":"` + hiddenID + `"}`),
+		json.RawMessage(`{"id":"projectless-2"}`),
+		json.RawMessage(`{"id":`),
+	}
+	got := r2dFilterWorkspaceSearchPage(rows, []string{visibleID})
+	if len(got) != 3 {
+		t.Fatalf("filtered rows = %d, want 3", len(got))
+	}
+	want := []string{"projectless", "visible", "projectless-2"}
+	for i, raw := range got {
+		var row struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.ID != want[i] {
+			t.Fatalf("row %d = %q, want %q; ranking changed", i, row.ID, want[i])
+		}
+	}
+}
+
 func TestR2DBatchChildrenNoLongerFailClosed(t *testing.T) {
 	t.Parallel()
 	r := httptest.NewRequest(http.MethodGet, "http://example.test/api/issues/children?parent_ids=11111111-1111-1111-1111-111111111111", nil)
