@@ -10,19 +10,35 @@ import (
 )
 
 // tryR2DIssueReadScope handles read surfaces whose Project identity is carried
-// inside a JSON request body. The issue-table API uses POST for read-only
-// query payloads, so the ordinary URL-only Project scope cannot authorize a
-// foreign collaborator before the Workspace membership middleware runs.
-//
-// Only explicit Project scopes are widened. Workspace-scoped table queries keep
-// the caller's active Workspace and are filtered natively by the handler. This
-// avoids mixing status/property/Agent/Squad semantics from different
-// Workspaces in one table query.
+// either in a read-query filter or inside a JSON request body. Only explicit
+// Project scopes are widened before Workspace membership. Workspace-scoped
+// views stay on the caller's active Workspace and are ACL-filtered natively.
 func tryR2DIssueReadScope(queries *db.Queries, w http.ResponseWriter, r *http.Request, next http.Handler, userID string) bool {
 	if r.Header.Get("X-Actor-Source") == "task_token" {
 		return false // Agent/Squad execution policy remains P06.
 	}
-	if r.Method != http.MethodPost || !r2dIssueTableReadPath(r.URL.Path) {
+
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if r.Method == http.MethodGet && path == "/api/issues/grouped" {
+		projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+		if projectID == "" {
+			return false
+		}
+		if _, err := parseR2DUUID(projectID); err != nil {
+			return false // preserve the handler's canonical malformed-filter response
+		}
+		ownerWorkspaceID, _, handled := r2dRequireProjectOperation(
+			queries, w, r, userID, projectID, r2dauth.OperationRead,
+		)
+		if handled {
+			return true
+		}
+		ctx := SetWorkspaceIDContext(r.Context(), ownerWorkspaceID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+		return true
+	}
+
+	if r.Method != http.MethodPost || !r2dIssueTableReadPath(path) {
 		return false
 	}
 
