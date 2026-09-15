@@ -1,0 +1,35 @@
+name: r2d-p04c2-test-dump
+
+on:
+  push:
+    branches:
+      - feat/p04-c2-issue-query-enforcement
+
+permissions:
+  contents: write
+
+jobs:
+  test-dump:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run focused tests and capture tail
+        shell: bash
+        working-directory: server
+        run: |
+          set +e
+          go test ./internal/middleware ./internal/handler > /tmp/p04c2-test.log 2>&1
+          status=$?
+          echo "exit_status=${status}" > ../.r2d-p04c2-test.log
+          tail -n 400 /tmp/p04c2-test.log >> ../.r2d-p04c2-test.log
+          exit 0
+      - name: Commit diagnostics and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/r2d-p04c2-test-dump.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .r2d-p04c2-test.log .github/workflows/r2d-p04c2-test-dump.yml
+          git commit -m "chore(r2d): capture P04-C2 focused test failure"
+          git push origin HEAD:${GITHUB_REF_NAME}
