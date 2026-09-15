@@ -1,10 +1,6 @@
 package db
 
-import (
-	"context"
-
-	"github.com/jackc/pgx/v5"
-)
+import "context"
 
 // R2DIssueACLTargetBatch is the minimum storage projection needed to authorize
 // issue mutations before an owner Workspace has been admitted. Projectless
@@ -45,8 +41,3 @@ ORDER BY id`, issueIDs)
 	}
 	return out, nil
 }
-
-// Compile-time documentation that *Queries continues to use pgx-backed DBTX;
-// pgx is imported here intentionally so this sidecar stays coupled to the same
-// driver contract as the generated package rather than introducing database/sql.
-var _ pgx.Rows
