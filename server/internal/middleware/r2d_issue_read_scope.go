@@ -10,9 +10,9 @@ import (
 )
 
 // tryR2DIssueReadScope handles read surfaces whose Project identity is carried
-// inside a JSON request body. The issue-table API is a GET-with-body contract,
-// so the ordinary URL-only Project scope cannot authorize a foreign
-// collaborator before the Workspace membership middleware runs.
+// inside a JSON request body. The issue-table API uses POST for read-only
+// query payloads, so the ordinary URL-only Project scope cannot authorize a
+// foreign collaborator before the Workspace membership middleware runs.
 //
 // Only explicit Project scopes are widened. Workspace-scoped table queries keep
 // the caller's active Workspace and are filtered natively by the handler. This
@@ -22,7 +22,7 @@ func tryR2DIssueReadScope(queries *db.Queries, w http.ResponseWriter, r *http.Re
 	if r.Header.Get("X-Actor-Source") == "task_token" {
 		return false // Agent/Squad execution policy remains P06.
 	}
-	if r.Method != http.MethodGet || !r2dIssueTableReadPath(r.URL.Path) {
+	if r.Method != http.MethodPost || !r2dIssueTableReadPath(r.URL.Path) {
 		return false
 	}
 
