@@ -120,6 +120,39 @@ ORDER BY p.id`, userID, projectIDs)
 	return out, nil
 }
 
+// R2DListWorkspaceProjectAccessFacts is used only as a fail-closed migration
+// guard for collection/aggregate surfaces that P04 has not made ACL-native yet.
+func (q *Queries) R2DListWorkspaceProjectAccessFacts(ctx context.Context, userID, workspaceID string) ([]R2DProjectAccessFacts, error) {
+	rows, err := q.db.Query(ctx, r2dProjectAccessFactsSelect+`
+WHERE p.workspace_id = $2::uuid
+ORDER BY p.id`, userID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]R2DProjectAccessFacts, 0)
+	for rows.Next() {
+		var f R2DProjectAccessFacts
+		if err := rows.Scan(
+			&f.ProjectID,
+			&f.OwnerWorkspaceID,
+			&f.Visibility,
+			&f.OwnerWorkspaceRole,
+			&f.DirectGrantRole,
+			&f.WorkspaceGrantRole,
+			&f.GlobalObserver,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // R2DIssueACLTarget performs only the global entity lookup needed before a
 // workspace has been authorized. A projectless issue returns an empty
 // ProjectID and therefore falls back to the ordinary Workspace gate.
