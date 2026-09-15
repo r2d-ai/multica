@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/r2dauth"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -19,6 +21,9 @@ func tryR2DIssueReadScope(queries *db.Queries, w http.ResponseWriter, r *http.Re
 	}
 
 	path := strings.TrimSuffix(r.URL.Path, "/")
+	if r.Method == http.MethodGet && path == "/api/issues/child-progress" {
+		return r2dServeChildIssueProgress(queries, w, r, userID)
+	}
 	if r.Method == http.MethodGet && path == "/api/issues/grouped" {
 		projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
 		if projectID == "" {
@@ -55,6 +60,66 @@ func tryR2DIssueReadScope(queries *db.Queries, w http.ResponseWriter, r *http.Re
 
 	ctx := SetWorkspaceIDContext(r.Context(), ownerWorkspaceID)
 	next.ServeHTTP(w, r.WithContext(ctx))
+	return true
+}
+
+func r2dServeChildIssueProgress(queries *db.Queries, w http.ResponseWriter, r *http.Request, userID string) bool {
+	workspaceID := ResolveWorkspaceIDFromRequest(r, queries)
+	if workspaceID == "" {
+		return false
+	}
+	_, isMember, err := r2dLoadWorkspaceMember(queries, r, userID, workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to authorize workspace")
+		return true
+	}
+	if !isMember {
+		observer, err := queries.R2DIsGlobalObserver(r.Context(), userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to authorize observer")
+			return true
+		}
+		if !observer {
+			return false // preserve the ordinary Workspace non-disclosure response
+		}
+	}
+
+	readableProjectIDs, err := r2dReadableWorkspaceProjectIDs(queries, r, userID, workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to apply project visibility")
+		return true
+	}
+	wsUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid workspace_id")
+		return true
+	}
+	terminalStatusKeys, err := issuestatus.ExpandCategories(
+		r.Context(), queries, wsUUID,
+		[]string{issuestatus.CategoryDone, issuestatus.CategoryClosed},
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve status categories")
+		return true
+	}
+	rows, err := queries.R2DChildIssueProgressVisible(r.Context(), workspaceID, readableProjectIDs, terminalStatusKeys)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get child issue progress")
+		return true
+	}
+
+	type progressEntry struct {
+		ParentIssueID string `json:"parent_issue_id"`
+		Total         int64  `json:"total"`
+		Done          int64  `json:"done"`
+	}
+	progress := make([]progressEntry, len(rows))
+	for i, row := range rows {
+		progress[i] = progressEntry{ParentIssueID: row.ParentIssueID, Total: row.Total, Done: row.Done}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"progress": progress})
 	return true
 }
 
