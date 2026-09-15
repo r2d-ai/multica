@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -35,16 +36,16 @@ func TestR2DReadJSONFieldsRestoresBody(t *testing.T) {
 func TestR2DRawUUID(t *testing.T) {
 	t.Parallel()
 	const id = "11111111-1111-1111-1111-111111111111"
-	got, err := r2dRawUUID([]byte(`"` + id + `"`))
+	got, err := r2dRawUUID(json.RawMessage(`"` + id + `"`))
 	if err != nil || got != id {
 		t.Fatalf("valid UUID = %q, %v; want %q, nil", got, err, id)
 	}
-	got, err = r2dRawUUID([]byte(`null`))
+	got, err = r2dRawUUID(json.RawMessage(`null`))
 	if err != nil || got != "" {
 		t.Fatalf("null UUID = %q, %v; want empty, nil", got, err)
 	}
 	for _, raw := range []string{`""`, `"not-a-uuid"`, `123`} {
-		if _, err := r2dRawUUID([]byte(raw)); err == nil {
+		if _, err := r2dRawUUID(json.RawMessage(raw)); err == nil {
 			t.Errorf("invalid UUID payload %s accepted", raw)
 		}
 	}
@@ -57,32 +58,24 @@ func TestR2DForeignProjectRestrictedFields(t *testing.T) {
 		"assignee_type", "assignee_id", "attachment_ids", "label_ids",
 		"origin_type", "origin_id",
 	} {
-		fields := map[string][]byte{field: []byte(`[]`)}
+		fields := map[string]json.RawMessage{field: json.RawMessage(`[]`)}
 		if field == "assignee_type" || field == "origin_type" {
-			fields[field] = []byte(`"member"`)
+			fields[field] = json.RawMessage(`"member"`)
 		}
-		converted := make(map[string]jsonRawMessage, len(fields))
-		for key, value := range fields {
-			converted[key] = value
-		}
-		if !r2dForeignProjectRestrictedFields(converted) {
+		if !r2dForeignProjectRestrictedFields(fields) {
 			t.Errorf("restricted field %q was not rejected", field)
 		}
 	}
 
-	if r2dForeignProjectRestrictedFields(map[string]jsonRawMessage{
-		"title":      []byte(`"safe"`),
-		"project_id": []byte(`"11111111-1111-1111-1111-111111111111"`),
+	if r2dForeignProjectRestrictedFields(map[string]json.RawMessage{
+		"title":      json.RawMessage(`"safe"`),
+		"project_id": json.RawMessage(`"11111111-1111-1111-1111-111111111111"`),
 	}) {
 		t.Fatal("project-native fields unexpectedly treated as workspace-owned")
 	}
-	if r2dForeignProjectRestrictedFields(map[string]jsonRawMessage{
-		"assignee_id": []byte(`null`),
+	if r2dForeignProjectRestrictedFields(map[string]json.RawMessage{
+		"assignee_id": json.RawMessage(`null`),
 	}) {
 		t.Fatal("null restricted create field should not request workspace inventory")
 	}
 }
-
-// Alias keeps the test literals compact while remaining exactly the type the
-// middleware helper accepts.
-type jsonRawMessage = []byte
