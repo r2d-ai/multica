@@ -26,6 +26,9 @@ func tryR2DIssueReadScope(queries *db.Queries, w http.ResponseWriter, r *http.Re
 	if r.Method == http.MethodGet && path == "/api/issues/child-progress" {
 		return r2dServeChildIssueProgress(queries, w, r, userID)
 	}
+	if r.Method == http.MethodGet && path == "/api/issues/children" {
+		return r2dServeBatchIssueChildren(queries, w, r, next, userID)
+	}
 	if r.Method == http.MethodGet && r2dDirectIssueChildrenPath(path) {
 		return r2dServeDirectIssueChildren(queries, w, r, next, userID, path)
 	}
@@ -79,11 +82,15 @@ func tryR2DIssueReadScope(queries *db.Queries, w http.ResponseWriter, r *http.Re
 }
 
 func r2dDirectIssueChildrenPath(path string) bool {
-	if !strings.HasPrefix(path, "/api/issues/") || !strings.HasSuffix(path, "/children") {
+	if !strings.HasPrefix(path, "/api/issues/") {
 		return false
 	}
-	rest := strings.TrimSuffix(strings.TrimPrefix(path, "/api/issues/"), "/children")
-	return rest != "" && !strings.Contains(rest, "/")
+	parts := strings.Split(strings.TrimPrefix(path, "/api/issues/"), "/")
+	if len(parts) != 2 || parts[1] != "children" {
+		return false
+	}
+	_, err := parseR2DUUID(parts[0])
+	return err == nil
 }
 
 func r2dServeDirectIssueChildren(queries *db.Queries, w http.ResponseWriter, r *http.Request, next http.Handler, userID, path string) bool {
