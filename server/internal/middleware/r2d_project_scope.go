@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -204,6 +205,143 @@ func tryR2DProjectScope(queries *db.Queries, w http.ResponseWriter, r *http.Requ
 	return false
 }
 
+func r2dExplicitProjectGrant(role string) bool {
+	switch r2dauth.ProjectRole(role) {
+	case r2dauth.ProjectRoleViewer, r2dauth.ProjectRoleMember, r2dauth.ProjectRoleManager:
+		return true
+	default:
+		return false
+	}
+}
+
+// r2dProjectCollectionIDs builds the Project set shown while one Workspace is
+// active. Membership in another Workspace by itself is NOT collaboration: a
+// foreign Project is injected only through an explicit user/workspace grant.
+// global_observer is the exception by design and receives deployment-wide read.
+func r2dProjectCollectionIDs(ctx context.Context, queries *db.Queries, userID, activeWorkspaceID string) ([]string, error) {
+	facts, err := queries.R2DListCandidateProjectAccessFacts(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0, len(facts))
+	seen := make(map[string]struct{}, len(facts))
+	for _, fact := range facts {
+		if fact.ProjectID == "" || !r2dauth.Resolve(r2dFacts(fact)).Can(r2dauth.OperationRead) {
+			continue
+		}
+		include := fact.OwnerWorkspaceID == activeWorkspaceID || fact.GlobalObserver
+		if !include && (r2dExplicitProjectGrant(fact.DirectGrantRole) || r2dExplicitProjectGrant(fact.WorkspaceGrantRole)) {
+			include = true
+		}
+		if !include {
+			continue
+		}
+		if _, ok := seen[fact.ProjectID]; ok {
+			continue
+		}
+		seen[fact.ProjectID] = struct{}{}
+		ids = append(ids, fact.ProjectID)
+	}
+	return ids, nil
+}
+
+func writeR2DJSON(w http.ResponseWriter, status int, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(status)
+	_, err = w.Write(body)
+	return err
+}
+
+func r2dRawProjectRows(rows []string) ([]json.RawMessage, error) {
+	out := make([]json.RawMessage, 0, len(rows))
+	for _, row := range rows {
+		raw := json.RawMessage(row)
+		if !json.Valid(raw) {
+			return nil, errors.New("invalid project json")
+		}
+		out = append(out, raw)
+	}
+	return out, nil
+}
+
+// serveR2DProjectCollection is the ACL-native Project discovery path. Unlike
+// the P04-A response filter it starts from the complete authorized Project set,
+// so explicitly shared foreign Projects actually appear in list/search.
+func serveR2DProjectCollection(queries *db.Queries, w http.ResponseWriter, r *http.Request, userID string) error {
+	activeWorkspaceID := WorkspaceIDFromContext(r.Context())
+	if activeWorkspaceID == "" {
+		return errors.New("missing active workspace context")
+	}
+	projectIDs, err := r2dProjectCollectionIDs(r.Context(), queries, userID, activeWorkspaceID)
+	if err != nil {
+		return err
+	}
+
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if path == "/api/projects" {
+		rows, err := queries.R2DListProjectsJSON(
+			r.Context(), projectIDs,
+			strings.TrimSpace(r.URL.Query().Get("status")),
+			strings.TrimSpace(r.URL.Query().Get("priority")),
+		)
+		if err != nil {
+			return err
+		}
+		projects, err := r2dRawProjectRows(rows)
+		if err != nil {
+			return err
+		}
+		return writeR2DJSON(w, http.StatusOK, map[string]any{
+			"projects": projects,
+			"total":    len(projects),
+		})
+	}
+
+	if path != "/api/projects/search" {
+		return errors.New("unsupported project collection path")
+	}
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "q parameter is required")
+		return nil
+	}
+	limit := 20
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if value, parseErr := strconv.Atoi(raw); parseErr == nil && value > 0 {
+			limit = value
+		}
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	offset := 0
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		if value, parseErr := strconv.Atoi(raw); parseErr == nil && value >= 0 {
+			offset = value
+		}
+	}
+	rows, err := queries.R2DSearchProjectsJSON(
+		r.Context(), projectIDs, query,
+		r.URL.Query().Get("include_closed") == "true",
+		limit, offset,
+	)
+	if err != nil {
+		return err
+	}
+	projects, err := r2dRawProjectRows(rows)
+	if err != nil {
+		return err
+	}
+	return writeR2DJSON(w, http.StatusOK, map[string]any{"projects": projects})
+}
+
 // r2dResponseBuffer captures bounded JSON collection responses so private
 // Project rows can be filtered before bytes leave the server. It is used only
 // for non-streaming GET list/search handlers.
@@ -233,10 +371,18 @@ func copyR2DResponse(dst http.ResponseWriter, src *r2dResponseBuffer, body []byt
 	_, _ = dst.Write(body)
 }
 
-// serveR2DFilteredCollection filters only the stable {projects:[...]} and
-// {issues:[...]} envelopes. Unknown shapes fail closed instead of forwarding
-// potentially private rows.
+// serveR2DFilteredCollection uses an ACL-native Project discovery path and
+// keeps P04-A's response filtering only for Issue list/search until P04-C
+// replaces those workspace-scoped queries as well.
 func serveR2DFilteredCollection(queries *db.Queries, w http.ResponseWriter, r *http.Request, next http.Handler, userID string) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if path == "/api/projects" || path == "/api/projects/search" {
+		if err := serveR2DProjectCollection(queries, w, r, userID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to apply project visibility")
+		}
+		return
+	}
+
 	buf := newR2DResponseBuffer()
 	next.ServeHTTP(buf, r)
 	if buf.status < 200 || buf.status >= 300 {
@@ -245,10 +391,7 @@ func serveR2DFilteredCollection(queries *db.Queries, w http.ResponseWriter, r *h
 	}
 
 	key := ""
-	path := strings.TrimSuffix(r.URL.Path, "/")
 	switch {
-	case path == "/api/projects" || path == "/api/projects/search":
-		key = "projects"
 	case path == "/api/issues" || path == "/api/issues/search":
 		key = "issues"
 	default:
