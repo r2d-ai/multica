@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/r2dauth"
@@ -112,7 +113,9 @@ func TestR2DUnfilteredIssueSurface(t *testing.T) {
 		{http.MethodGet, "/api/issues", false},
 		{http.MethodPost, "/api/issues", true},
 		{http.MethodGet, "/api/issues/search", false},
-		{http.MethodGet, "/api/issues/table/groups", true},
+		{http.MethodGet, "/api/issues/table/groups", false},
+		{http.MethodGet, "/api/issues/table/rows", false},
+		{http.MethodGet, "/api/issues/table/facets", false},
 		{http.MethodPost, "/api/issues/query", true},
 		{http.MethodPost, "/api/issues/batch-update", true},
 		{http.MethodGet, "/api/issues/ABC-42", true},
@@ -125,6 +128,41 @@ func TestR2DUnfilteredIssueSurface(t *testing.T) {
 		if got := r2dUnfilteredIssueSurface(req); got != tt.want {
 			t.Errorf("%s %s: got %v want %v", tt.method, tt.path, got, tt.want)
 		}
+	}
+}
+
+func TestR2DIssueTableProjectScope(t *testing.T) {
+	t.Parallel()
+	projectID := "11111111-1111-1111-1111-111111111111"
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"http://example.test/api/issues/table/rows",
+		strings.NewReader(`{"query":{"scope":{"kind":"project","project_id":"`+projectID+`"}}}`),
+	)
+
+	for i := 0; i < 2; i++ {
+		got, ok := r2dIssueTableProjectScope(req)
+		if !ok || got != projectID {
+			t.Fatalf("pass %d: project scope=(%q,%v), want (%q,true)", i+1, got, ok, projectID)
+		}
+	}
+
+	workspaceReq := httptest.NewRequest(
+		http.MethodGet,
+		"http://example.test/api/issues/table/groups",
+		strings.NewReader(`{"query":{"scope":{"kind":"workspace"}}}`),
+	)
+	if got, ok := r2dIssueTableProjectScope(workspaceReq); ok || got != "" {
+		t.Fatalf("workspace scope widened unexpectedly: (%q,%v)", got, ok)
+	}
+
+	invalidReq := httptest.NewRequest(
+		http.MethodGet,
+		"http://example.test/api/issues/table/facets",
+		strings.NewReader(`{"query":{"scope":{"kind":"project","project_id":"not-a-uuid"}}}`),
+	)
+	if got, ok := r2dIssueTableProjectScope(invalidReq); ok || got != "" {
+		t.Fatalf("invalid project scope widened unexpectedly: (%q,%v)", got, ok)
 	}
 }
 
