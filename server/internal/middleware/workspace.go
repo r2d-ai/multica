@@ -232,10 +232,18 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 			}
 
 			// R2D Project ACL is an intentional exception to the ordinary Team ==
-			// Workspace boundary. Only the member-level middleware takes this
-			// path; role-gated Workspace administration is never bypassed.
-			if len(roles) == 0 && tryR2DProjectScope(queries, w, r, next, userID) {
-				return
+			// Workspace boundary. Only the member-level middleware takes these
+			// paths; role-gated Workspace administration is never bypassed.
+			if len(roles) == 0 {
+				// Body-aware Issue guards run first so a source Project grant cannot
+				// be abused to write into a destination Project or escape into
+				// projectless Workspace-private work.
+				if tryR2DIssueSpecialScope(queries, w, r, next, userID) {
+					return
+				}
+				if tryR2DProjectScope(queries, w, r, next, userID) {
+					return
+				}
 			}
 
 			wsUUID, err := util.ParseUUID(workspaceID)
