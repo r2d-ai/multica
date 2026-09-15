@@ -46,9 +46,9 @@ func TestR2DParseIssueParentIDs(t *testing.T) {
 func TestR2DProjectSearchWindow(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		query                string
+		query               string
 		limit, offset, need int
-		ok                   bool
+		ok                  bool
 	}{
 		{"", 20, 0, 20, true},
 		{"?limit=100&offset=10", 50, 10, 60, true},
@@ -79,7 +79,9 @@ func TestR2DFilterProjectSearchPage(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("filtered rows = %d, want 2", len(got))
 	}
-	var first, second struct{ ID string `json:"id"` }
+	var first, second struct {
+		ID string `json:"id"`
+	}
 	if err := json.Unmarshal(got[0], &first); err != nil {
 		t.Fatal(err)
 	}
