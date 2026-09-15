@@ -35,7 +35,7 @@ func tryR2DIssueReadScope(queries *db.Queries, w http.ResponseWriter, r *http.Re
 	if r.Method == http.MethodGet && path == "/api/issues/search" {
 		projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
 		if projectID == "" {
-			return false
+			return r2dServeWorkspaceSearch(queries, w, r, next, userID)
 		}
 		if _, err := parseR2DUUID(projectID); err != nil {
 			return false // preserve the handler's canonical malformed-filter response
