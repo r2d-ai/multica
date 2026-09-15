@@ -43,6 +43,13 @@ func r2dUnfilteredIssueSurface(r *http.Request) bool {
 		// its SQL window, so group totals and pagination are ACL-native.
 		return false
 	}
+	if path == "/api/issues/children" && r.Method == http.MethodGet {
+		// Valid parent_ids are authorized and rewritten before Workspace
+		// membership, then child rows are filtered by their own Project ACL.
+		// Empty/malformed input is non-enumerating and can safely retain the
+		// upstream handler's canonical response without the temporary guard.
+		return false
+	}
 	if path == "/api/issues/query" && r.Method == http.MethodPost {
 		// QueryIssues delegates to ListIssues after rebuilding the URL query.
 		// P04-C2 rewrites the string-map body with readable project_ids first.
