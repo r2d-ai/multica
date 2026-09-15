@@ -17,13 +17,12 @@ import (
 const r2dIssueBodyLimit = 2 << 20
 
 // tryR2DIssueSpecialScope runs before the ordinary Workspace membership
-// lookup. It handles the mutation cases where the destination Project is in the
-// request body, plus the POST /query twin of a Project-filtered issue list.
-// Entity source authorization remains in tryR2DProjectScope; this layer closes
-// destination/batch escalation without duplicating that policy.
+// lookup. It owns body-aware mutation authorization and the POST /query twin
+// of a Project-filtered issue list. Task-token actors stay on the legacy
+// Workspace boundary until P06 defines Agent/Squad Project execution policy.
 func tryR2DIssueSpecialScope(queries *db.Queries, w http.ResponseWriter, r *http.Request, next http.Handler, userID string) bool {
 	if r.Header.Get("X-Actor-Source") == "task_token" {
-		return false // Agent/Squad execution policy remains P06.
+		return false
 	}
 
 	path := strings.TrimSuffix(r.URL.Path, "/")
@@ -56,21 +55,14 @@ func tryR2DIssueSpecialScope(queries *db.Queries, w http.ResponseWriter, r *http
 	if !isUpdate && !isMove {
 		return false
 	}
-
-	blocked, err := r2dGuardDirectIssueDestination(queries, w, r, userID, issueID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to authorize issue destination")
-		return true
-	}
-	return blocked
+	return r2dHandleDirectIssueMutation(queries, w, r, next, userID, issueID)
 }
 
 func r2dReadJSONFields(r *http.Request) (map[string]json.RawMessage, error) {
 	if r.Body == nil {
 		return nil, errors.New("missing request body")
 	}
-	limited := io.LimitReader(r.Body, r2dIssueBodyLimit+1)
-	body, err := io.ReadAll(limited)
+	body, err := io.ReadAll(io.LimitReader(r.Body, r2dIssueBodyLimit+1))
 	if err != nil {
 		return nil, err
 	}
@@ -105,22 +97,33 @@ func r2dRawUUID(raw json.RawMessage) (string, error) {
 	return value, nil
 }
 
-func r2dWorkspaceMember(queries *db.Queries, r *http.Request, userID, workspaceID string) (bool, error) {
+func r2dLoadWorkspaceMember(queries *db.Queries, r *http.Request, userID, workspaceID string) (db.Member, bool, error) {
 	userUUID, err := util.ParseUUID(userID)
 	if err != nil {
-		return false, err
+		return db.Member{}, false, err
 	}
 	workspaceUUID, err := util.ParseUUID(workspaceID)
 	if err != nil {
-		return false, err
+		return db.Member{}, false, err
 	}
-	_, err = queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
+	member, err := queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
 		UserID: userUUID, WorkspaceID: workspaceUUID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return db.Member{}, false, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return db.Member{}, false, err
+	}
+	return member, true, nil
+}
+
+func r2dServeAuthorizedWorkspace(w http.ResponseWriter, r *http.Request, next http.Handler, workspaceID string, member db.Member, hasMember bool) {
+	ctx := SetWorkspaceIDContext(r.Context(), workspaceID)
+	if hasMember {
+		ctx = SetMemberContext(r.Context(), workspaceID, member)
+	}
+	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
 func r2dRequireProjectOperation(queries *db.Queries, w http.ResponseWriter, r *http.Request, userID, projectID string, op r2dauth.Operation) (workspaceID string, allowed bool, handled bool) {
@@ -150,7 +153,10 @@ func r2dRequireProjectOperation(queries *db.Queries, w http.ResponseWriter, r *h
 }
 
 func r2dForeignProjectRestrictedFields(fields map[string]json.RawMessage) bool {
-	for _, key := range []string{"assignee_type", "assignee_id", "attachment_ids", "label_ids"} {
+	for _, key := range []string{
+		"assignee_type", "assignee_id", "attachment_ids", "label_ids",
+		"origin_type", "origin_id",
+	} {
 		if raw, ok := fields[key]; ok && !r2dRawNull(raw) {
 			return true
 		}
@@ -161,8 +167,7 @@ func r2dForeignProjectRestrictedFields(fields map[string]json.RawMessage) bool {
 func r2dHandleIssueCreateScope(queries *db.Queries, w http.ResponseWriter, r *http.Request, next http.Handler, userID string) bool {
 	fields, err := r2dReadJSONFields(r)
 	if err != nil {
-		// Preserve the handler's normal validation/error wording.
-		return false
+		return false // preserve the handler's canonical malformed-body response
 	}
 	rawProject, touched := fields["project_id"]
 	if !touched || r2dRawNull(rawProject) {
@@ -178,15 +183,14 @@ func r2dHandleIssueCreateScope(queries *db.Queries, w http.ResponseWriter, r *ht
 		return true
 	}
 
-	isMember, err := r2dWorkspaceMember(queries, r, userID, ownerWorkspaceID)
+	member, isMember, err := r2dLoadWorkspaceMember(queries, r, userID, ownerWorkspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to authorize workspace")
 		return true
 	}
 	if !isMember && r2dForeignProjectRestrictedFields(fields) {
-		// Project grants never imply discovery/use of Workspace-owned Agents,
-		// Squads, labels or attachment inventory. P06 may add a deliberately
-		// scoped execution model; until then this fails closed.
+		// A Project grant never grants Workspace-owned Agent/Squad/label/file
+		// inventory, nor trusted task/origin provenance.
 		writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
 		return true
 	}
@@ -201,13 +205,9 @@ func r2dHandleIssueCreateScope(queries *db.Queries, w http.ResponseWriter, r *ht
 		}
 	}
 
-	if isMember {
-		// Destination ACL has been checked; let the normal Workspace middleware
-		// inject the real member row expected by ordinary in-workspace writes.
-		return false
-	}
-	ctx := SetWorkspaceIDContext(r.Context(), ownerWorkspaceID)
-	next.ServeHTTP(w, r.WithContext(ctx))
+	// Destination ACL is already authoritative. Dispatch directly instead of
+	// falling through the temporary fail-closed collection guard.
+	r2dServeAuthorizedWorkspace(w, r, next, ownerWorkspaceID, member, isMember)
 	return true
 }
 
@@ -226,7 +226,7 @@ func r2dGuardParentReference(queries *db.Queries, w http.ResponseWriter, r *http
 		return true
 	}
 	if target.ProjectID == "" {
-		member, err := r2dWorkspaceMember(queries, r, userID, workspaceID)
+		_, member, err := r2dLoadWorkspaceMember(queries, r, userID, workspaceID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to authorize workspace")
 			return true
@@ -241,37 +241,88 @@ func r2dGuardParentReference(queries *db.Queries, w http.ResponseWriter, r *http
 	if handled {
 		return true
 	}
-	if requireSameProject && effectiveProjectID != "" && target.ProjectID != effectiveProjectID {
+	if requireSameProject && target.ProjectID != effectiveProjectID {
 		writeError(w, http.StatusForbidden, "cross-project parent relationship requires workspace membership")
 		return true
 	}
 	return false
 }
 
-func r2dGuardDirectIssueDestination(queries *db.Queries, w http.ResponseWriter, r *http.Request, userID, issueID string) (bool, error) {
+func r2dGuardMoveAnchorReference(queries *db.Queries, w http.ResponseWriter, r *http.Request, userID, anchorID, workspaceID, effectiveProjectID string, isMember bool) bool {
+	target, err := queries.R2DLoadIssueACLTarget(r.Context(), anchorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusBadRequest, "move anchor not found in this workspace")
+		return true
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to authorize move anchor")
+		return true
+	}
+	if target.WorkspaceID != workspaceID {
+		writeError(w, http.StatusBadRequest, "move anchor not found in this workspace")
+		return true
+	}
+	if target.ProjectID == "" {
+		if !isMember {
+			writeError(w, http.StatusForbidden, "workspace membership required for projectless move anchor")
+			return true
+		}
+		return false
+	}
+	_, _, handled := r2dRequireProjectOperation(queries, w, r, userID, target.ProjectID, r2dauth.OperationRead)
+	if handled {
+		return true
+	}
+	if !isMember && target.ProjectID != effectiveProjectID {
+		writeError(w, http.StatusForbidden, "cross-project move anchor requires workspace membership")
+		return true
+	}
+	return false
+}
+
+// r2dHandleDirectIssueMutation authorizes the source before inspecting any
+// destination references. That ordering prevents hidden source IDs from being
+// used as an oracle for Project/parent/anchor metadata.
+func r2dHandleDirectIssueMutation(queries *db.Queries, w http.ResponseWriter, r *http.Request, next http.Handler, userID, issueID string) bool {
 	fields, err := r2dReadJSONFields(r)
 	if err != nil {
-		return false, nil // handler owns malformed-body validation
+		return false // source authorization continues in the legacy path
 	}
 	target, err := queries.R2DLoadIssueACLTarget(r.Context(), issueID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil // source path will render canonical not-found
+		return false
 	}
 	if err != nil {
-		return false, err
+		writeError(w, http.StatusInternalServerError, "failed to authorize issue")
+		return true
 	}
-	isMember, err := r2dWorkspaceMember(queries, r, userID, target.WorkspaceID)
+
+	member, isMember, err := r2dLoadWorkspaceMember(queries, r, userID, target.WorkspaceID)
 	if err != nil {
-		return false, err
+		writeError(w, http.StatusInternalServerError, "failed to authorize workspace")
+		return true
 	}
-	if !isMember {
-		if _, ok := fields["assignee_type"]; ok {
-			writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
-			return true, nil
+	if target.ProjectID != "" {
+		sourceWorkspaceID, _, handled := r2dRequireProjectOperation(queries, w, r, userID, target.ProjectID, r2dauth.OperationContribute)
+		if handled {
+			return true
 		}
-		if _, ok := fields["assignee_id"]; ok {
-			writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
-			return true, nil
+		if sourceWorkspaceID != target.WorkspaceID {
+			writeError(w, http.StatusNotFound, "issue not found")
+			return true
+		}
+	} else if !isMember {
+		// Projectless issue existence is Workspace-private. Let the normal member
+		// gate return its non-disclosing Workspace not-found response.
+		return false
+	}
+
+	if !isMember {
+		for _, key := range []string{"assignee_type", "assignee_id", "attachment_ids"} {
+			if _, touched := fields[key]; touched {
+				writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
+				return true
+			}
 		}
 	}
 
@@ -281,21 +332,21 @@ func r2dGuardDirectIssueDestination(queries *db.Queries, w http.ResponseWriter, 
 			effectiveProjectID = ""
 			if target.ProjectID != "" && !isMember {
 				writeError(w, http.StatusForbidden, "workspace membership required to remove issue from project")
-				return true, nil
+				return true
 			}
 		} else {
 			destinationProjectID, parseErr := r2dRawUUID(rawProject)
 			if parseErr != nil {
 				writeError(w, http.StatusBadRequest, "invalid project_id")
-				return true, nil
+				return true
 			}
 			destinationWorkspaceID, _, handled := r2dRequireProjectOperation(queries, w, r, userID, destinationProjectID, r2dauth.OperationContribute)
 			if handled {
-				return true, nil
+				return true
 			}
 			if destinationWorkspaceID != target.WorkspaceID {
 				writeError(w, http.StatusBadRequest, "project not found in this workspace")
-				return true, nil
+				return true
 			}
 			effectiveProjectID = destinationProjectID
 		}
@@ -305,13 +356,29 @@ func r2dGuardDirectIssueDestination(queries *db.Queries, w http.ResponseWriter, 
 		parentID, parseErr := r2dRawUUID(rawParent)
 		if parseErr != nil {
 			writeError(w, http.StatusBadRequest, "invalid parent_issue_id")
-			return true, nil
+			return true
 		}
 		if r2dGuardParentReference(queries, w, r, userID, parentID, target.WorkspaceID, effectiveProjectID, !isMember) {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	for _, key := range []string{"before_id", "after_id"} {
+		rawAnchor, touched := fields[key]
+		if !touched || r2dRawNull(rawAnchor) {
+			continue
+		}
+		anchorID, parseErr := r2dRawUUID(rawAnchor)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid "+key)
+			return true
+		}
+		if r2dGuardMoveAnchorReference(queries, w, r, userID, anchorID, target.WorkspaceID, effectiveProjectID, isMember) {
+			return true
+		}
+	}
+
+	r2dServeAuthorizedWorkspace(w, r, next, target.WorkspaceID, member, isMember)
+	return true
 }
 
 func r2dHandleProjectFilteredIssueQuery(queries *db.Queries, w http.ResponseWriter, r *http.Request, next http.Handler, userID string) bool {
@@ -336,8 +403,12 @@ func r2dHandleProjectFilteredIssueQuery(queries *db.Queries, w http.ResponseWrit
 	if handled {
 		return true
 	}
-	ctx := SetWorkspaceIDContext(r.Context(), ownerWorkspaceID)
-	next.ServeHTTP(w, r.WithContext(ctx))
+	member, isMember, err := r2dLoadWorkspaceMember(queries, r, userID, ownerWorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to authorize workspace")
+		return true
+	}
+	r2dServeAuthorizedWorkspace(w, r, next, ownerWorkspaceID, member, isMember)
 	return true
 }
 
@@ -383,7 +454,8 @@ func r2dHandleIssueBatchScope(queries *db.Queries, w http.ResponseWriter, r *htt
 	hasProjectless := false
 	for _, target := range targets {
 		if target.WorkspaceID != workspaceID {
-			writeError(w, http.StatusBadRequest, "batch issues must belong to one workspace")
+			// Do not expose that all supplied IDs exist across multiple tenants.
+			writeError(w, http.StatusNotFound, "issue not found")
 			return true
 		}
 		if target.ProjectID == "" {
@@ -396,13 +468,13 @@ func r2dHandleIssueBatchScope(queries *db.Queries, w http.ResponseWriter, r *htt
 		}
 	}
 
-	isMember, err := r2dWorkspaceMember(queries, r, userID, workspaceID)
+	member, isMember, err := r2dLoadWorkspaceMember(queries, r, userID, workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to authorize workspace")
 		return true
 	}
 	if hasProjectless && !isMember {
-		writeError(w, http.StatusForbidden, "workspace membership required for projectless issues")
+		writeError(w, http.StatusNotFound, "issue not found")
 		return true
 	}
 
@@ -421,7 +493,7 @@ func r2dHandleIssueBatchScope(queries *db.Queries, w http.ResponseWriter, r *htt
 			if ok && decision.Can(r2dauth.OperationRead) {
 				writeError(w, http.StatusForbidden, "insufficient project permissions")
 			} else {
-				writeError(w, http.StatusNotFound, "project not found")
+				writeError(w, http.StatusNotFound, "issue not found")
 			}
 			return true
 		}
@@ -433,13 +505,11 @@ func r2dHandleIssueBatchScope(queries *db.Queries, w http.ResponseWriter, r *htt
 			var updates map[string]json.RawMessage
 			if json.Unmarshal(rawUpdates, &updates) == nil {
 				if !isMember {
-					if _, touched := updates["assignee_type"]; touched {
-						writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
-						return true
-					}
-					if _, touched := updates["assignee_id"]; touched {
-						writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
-						return true
+					for _, key := range []string{"assignee_type", "assignee_id"} {
+						if _, touched := updates[key]; touched {
+							writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
+							return true
+						}
 					}
 				}
 
@@ -485,12 +555,9 @@ func r2dHandleIssueBatchScope(queries *db.Queries, w http.ResponseWriter, r *htt
 		}
 	}
 
-	ctx := SetWorkspaceIDContext(r.Context(), workspaceID)
-	if isMember {
-		// Let the ordinary middleware inject the actual member object. The ACL
-		// checks above still protect private Projects/destination transitions.
-		return false
-	}
-	next.ServeHTTP(w, r.WithContext(ctx))
+	// Source and destination ACLs have already been checked in batches. Direct
+	// dispatch avoids the temporary fail-closed collection guard while retaining
+	// the real member context for normal owner-Workspace callers.
+	r2dServeAuthorizedWorkspace(w, r, next, workspaceID, member, isMember)
 	return true
 }
