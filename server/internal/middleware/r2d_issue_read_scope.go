@@ -89,18 +89,20 @@ func r2dServeDirectIssueChildren(queries *db.Queries, w http.ResponseWriter, r *
 		writeError(w, http.StatusInternalServerError, "failed to authorize issue")
 		return true
 	}
-	if target.ProjectID == "" {
-		return false // Projectless parent retains ordinary Workspace membership.
-	}
-	ownerWorkspaceID, _, handled := r2dRequireProjectOperation(
-		queries, w, r, userID, target.ProjectID, r2dauth.OperationRead,
-	)
-	if handled {
-		return true
-	}
-	if ownerWorkspaceID != target.WorkspaceID {
-		writeError(w, http.StatusNotFound, "issue not found")
-		return true
+
+	ownerWorkspaceID := target.WorkspaceID
+	if target.ProjectID != "" {
+		var handled bool
+		ownerWorkspaceID, _, handled = r2dRequireProjectOperation(
+			queries, w, r, userID, target.ProjectID, r2dauth.OperationRead,
+		)
+		if handled {
+			return true
+		}
+		if ownerWorkspaceID != target.WorkspaceID {
+			writeError(w, http.StatusNotFound, "issue not found")
+			return true
+		}
 	}
 
 	_, isMember, err := r2dLoadWorkspaceMember(queries, r, userID, ownerWorkspaceID)
@@ -115,6 +117,9 @@ func r2dServeDirectIssueChildren(queries *db.Queries, w http.ResponseWriter, r *
 			writeError(w, http.StatusInternalServerError, "failed to authorize observer")
 			return true
 		}
+	}
+	if target.ProjectID == "" && !allowProjectless {
+		return false // preserve Workspace-private non-disclosure for the parent
 	}
 
 	buf := newR2DResponseBuffer()
