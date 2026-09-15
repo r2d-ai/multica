@@ -1,0 +1,80 @@
+name: r2d-p04c2-table-acl
+
+on:
+  push:
+    branches:
+      - feat/p04-c2-issue-query-enforcement
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply minimal P04-C2 integration hooks
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              if new in s:
+                  return
+              if old not in s:
+                  raise SystemExit(f"patch marker not found in {path}")
+              p.write_text(s.replace(old, new, 1))
+
+          replace_once(
+              "server/internal/middleware/workspace.go",
+              '''\t\t\tif len(roles) == 0 {\n\t\t\t\t// Body-aware Issue guards run first so a source Project grant cannot\n''',
+              '''\t\t\tif len(roles) == 0 {\n\t\t\t\t// GET-with-body Issue table scopes need the same pre-membership Project\n\t\t\t\t// authorization as URL-scoped reads. Only explicit Project scopes widen.\n\t\t\t\tif tryR2DIssueReadScope(queries, w, r, next, userID) {\n\t\t\t\t\treturn\n\t\t\t\t}\n\t\t\t\t// Body-aware Issue guards run first so a source Project grant cannot\n''',
+          )
+
+          replace_once(
+              "server/internal/handler/issue_table_query.go",
+              '''\twhere := []string{"i.workspace_id = $1"}\n\targs := []any{workspaceUUID}\n\taddArg := func(value any) string {\n''',
+              '''\tuserID, ok := requireUserID(w, r)\n\tif !ok {\n\t\treturn issueTableSQL{}, false\n\t}\n\treadableProjectIDs, err := h.r2dReadableWorkspaceProjectIDs(\n\t\tr.Context(), userID, util.UUIDToString(workspaceUUID),\n\t)\n\tif err != nil {\n\t\twriteError(w, http.StatusInternalServerError, "failed to apply project visibility")\n\t\treturn issueTableSQL{}, false\n\t}\n\n\t// Projectless Issues remain Workspace-scoped. Project-backed Issues share\n\t// the exact readable-Project set resolved by r2dauth, so every row/group/\n\t// facet/count query built from this predicate has identical ACL semantics.\n\twhere := []string{"i.workspace_id = $1 AND (i.project_id IS NULL OR i.project_id = ANY($2::uuid[]))"}\n\targs := []any{workspaceUUID, readableProjectIDs}\n\taddArg := func(value any) string {\n''',
+          )
+
+          replace_once(
+              "server/internal/middleware/r2d_failclosed.go",
+              '''\tif path == "/api/issues/search" {\n\t\treturn r.Method != http.MethodGet\n\t}\n''',
+              '''\tif path == "/api/issues/search" {\n\t\treturn r.Method != http.MethodGet\n\t}\n\tif r.Method == http.MethodGet {\n\t\tswitch path {\n\t\tcase "/api/issues/table/rows", "/api/issues/table/groups", "/api/issues/table/facets":\n\t\t\t// P04-C2 compiles these from an ACL-native membership predicate.\n\t\t\treturn false\n\t\t}\n\t}\n''',
+          )
+
+          Path(".github/workflows/r2d-p04c2-table-acl.yml").unlink()
+
+      - name: Format
+        run: gofmt -w server/internal/middleware/workspace.go server/internal/middleware/r2d_issue_read_scope.go server/internal/handler/issue_table_query.go server/internal/handler/r2d_issue_table_acl.go
+
+      - name: Compile focused packages
+        id: tests
+        continue-on-error: true
+        working-directory: server
+        run: go test ./internal/middleware ./internal/handler
+
+      - name: Commit P04-C2 table ACL
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/internal/middleware/workspace.go \
+                  server/internal/middleware/r2d_failclosed.go \
+                  server/internal/middleware/r2d_issue_read_scope.go \
+                  server/internal/handler/issue_table_query.go \
+                  server/internal/handler/r2d_issue_table_acl.go \
+                  .github/workflows/r2d-p04c2-table-acl.yml
+          git diff --cached --quiet && exit 0
+          git commit -m "feat(acl): enforce project visibility in issue tables"
+          git push origin HEAD:${GITHUB_REF_NAME}
+
+      - name: Fail if focused tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
