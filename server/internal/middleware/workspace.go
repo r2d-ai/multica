@@ -230,6 +230,14 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 				writeError(w, http.StatusUnauthorized, "user not authenticated")
 				return
 			}
+
+			// R2D Project ACL is an intentional exception to the ordinary Team ==
+			// Workspace boundary. Only the member-level middleware takes this
+			// path; role-gated Workspace administration is never bypassed.
+			if len(roles) == 0 && tryR2DProjectScope(queries, w, r, next, userID) {
+				return
+			}
+
 			wsUUID, err := util.ParseUUID(workspaceID)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, "invalid workspace_id")
@@ -259,7 +267,12 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 			}
 
 			ctx := SetMemberContext(r.Context(), workspaceID, member)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			scoped := r.WithContext(ctx)
+			if len(roles) == 0 && shouldR2DFilterCollection(scoped) {
+				serveR2DFilteredCollection(queries, w, scoped, next, userID)
+				return
+			}
+			next.ServeHTTP(w, scoped)
 		})
 	}
 }
