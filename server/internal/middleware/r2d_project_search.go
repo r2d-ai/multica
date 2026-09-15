@@ -14,6 +14,43 @@ const (
 	r2dProjectSearchMaxScan = 500
 )
 
+func r2dProjectSearchWindow(r *http.Request) (limit, offset, need int, ok bool) {
+	limit = 20
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			limit = value
+		}
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	offset = 0
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value >= 0 {
+			offset = value
+		}
+	}
+	need = offset + limit
+	return limit, offset, need, need <= r2dProjectSearchMaxScan
+}
+
+// r2dFilterProjectSearchPage keeps only rows that explicitly name the already
+// authorized Project. Projectless, malformed and unrelated rows are dropped.
+// Removal preserves upstream ranking because relative order never changes.
+func r2dFilterProjectSearchPage(issues []json.RawMessage, projectID string) []json.RawMessage {
+	out := make([]json.RawMessage, 0, len(issues))
+	for _, raw := range issues {
+		var identity struct {
+			ProjectID *string `json:"project_id"`
+		}
+		if json.Unmarshal(raw, &identity) != nil || identity.ProjectID == nil || *identity.ProjectID != projectID {
+			continue
+		}
+		out = append(out, raw)
+	}
+	return out
+}
+
 // r2dServeProjectSearch adapts the upstream Workspace-scoped search into an
 // explicitly Project-scoped read without copying its ranking SQL. Filtering a
 // single upstream page would make hidden/unrelated Workspace rows displace the
@@ -28,23 +65,8 @@ func r2dServeProjectSearch(queries *db.Queries, w http.ResponseWriter, r *http.R
 		return true
 	}
 
-	limit := 20
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
-			limit = value
-		}
-	}
-	if limit > 50 {
-		limit = 50
-	}
-	offset := 0
-	if raw := r.URL.Query().Get("offset"); raw != "" {
-		if value, err := strconv.Atoi(raw); err == nil && value >= 0 {
-			offset = value
-		}
-	}
-	need := offset + limit
-	if need > r2dProjectSearchMaxScan {
+	limit, offset, need, ok := r2dProjectSearchWindow(r)
+	if !ok {
 		writeError(w, http.StatusBadRequest, "project search offset is too large; refine the query")
 		return true
 	}
@@ -74,15 +96,7 @@ func r2dServeProjectSearch(queries *db.Queries, w http.ResponseWriter, r *http.R
 			writeError(w, http.StatusInternalServerError, "failed to apply project visibility")
 			return true
 		}
-		for _, raw := range envelope.Issues {
-			var identity struct {
-				ProjectID *string `json:"project_id"`
-			}
-			if json.Unmarshal(raw, &identity) != nil || identity.ProjectID == nil || *identity.ProjectID != projectID {
-				continue
-			}
-			matches = append(matches, raw)
-		}
+		matches = append(matches, r2dFilterProjectSearchPage(envelope.Issues, projectID)...)
 		if len(envelope.Issues) < r2dProjectSearchChunk {
 			break
 		}
