@@ -2,9 +2,11 @@ package middleware
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/r2dauth"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -23,6 +25,9 @@ func tryR2DIssueReadScope(queries *db.Queries, w http.ResponseWriter, r *http.Re
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	if r.Method == http.MethodGet && path == "/api/issues/child-progress" {
 		return r2dServeChildIssueProgress(queries, w, r, userID)
+	}
+	if r.Method == http.MethodGet && r2dDirectIssueChildrenPath(path) {
+		return r2dServeDirectIssueChildren(queries, w, r, next, userID, path)
 	}
 	if r.Method == http.MethodGet && path == "/api/issues/grouped" {
 		projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
@@ -60,6 +65,71 @@ func tryR2DIssueReadScope(queries *db.Queries, w http.ResponseWriter, r *http.Re
 
 	ctx := SetWorkspaceIDContext(r.Context(), ownerWorkspaceID)
 	next.ServeHTTP(w, r.WithContext(ctx))
+	return true
+}
+
+func r2dDirectIssueChildrenPath(path string) bool {
+	if !strings.HasPrefix(path, "/api/issues/") || !strings.HasSuffix(path, "/children") {
+		return false
+	}
+	rest := strings.TrimSuffix(strings.TrimPrefix(path, "/api/issues/"), "/children")
+	return rest != "" && !strings.Contains(rest, "/")
+}
+
+func r2dServeDirectIssueChildren(queries *db.Queries, w http.ResponseWriter, r *http.Request, next http.Handler, userID, path string) bool {
+	issueID := strings.TrimSuffix(strings.TrimPrefix(path, "/api/issues/"), "/children")
+	if _, err := parseR2DUUID(issueID); err != nil {
+		return false
+	}
+	target, err := queries.R2DLoadIssueACLTarget(r.Context(), issueID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to authorize issue")
+		return true
+	}
+	if target.ProjectID == "" {
+		return false // Projectless parent retains ordinary Workspace membership.
+	}
+	ownerWorkspaceID, _, handled := r2dRequireProjectOperation(
+		queries, w, r, userID, target.ProjectID, r2dauth.OperationRead,
+	)
+	if handled {
+		return true
+	}
+	if ownerWorkspaceID != target.WorkspaceID {
+		writeError(w, http.StatusNotFound, "issue not found")
+		return true
+	}
+
+	_, isMember, err := r2dLoadWorkspaceMember(queries, r, userID, ownerWorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to authorize workspace")
+		return true
+	}
+	allowProjectless := isMember
+	if !allowProjectless {
+		allowProjectless, err = queries.R2DIsGlobalObserver(r.Context(), userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to authorize observer")
+			return true
+		}
+	}
+
+	buf := newR2DResponseBuffer()
+	ctx := SetWorkspaceIDContext(r.Context(), ownerWorkspaceID)
+	next.ServeHTTP(buf, r.WithContext(ctx))
+	if buf.status < 200 || buf.status >= 300 {
+		copyR2DResponse(w, buf, buf.body.Bytes())
+		return true
+	}
+	filtered, err := filterR2DIssueCollectionScoped(r.Context(), queries, userID, buf.body.Bytes(), allowProjectless, "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to apply project visibility")
+		return true
+	}
+	copyR2DResponse(w, buf, filtered)
 	return true
 }
 
