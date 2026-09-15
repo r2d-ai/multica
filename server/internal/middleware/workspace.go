@@ -268,9 +268,20 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 
 			ctx := SetMemberContext(r.Context(), workspaceID, member)
 			scoped := r.WithContext(ctx)
-			if len(roles) == 0 && shouldR2DFilterCollection(scoped) {
-				serveR2DFilteredCollection(queries, w, scoped, next, userID)
-				return
+			if len(roles) == 0 {
+				blocked, guardErr := shouldR2DFailClosed(queries, scoped, userID, workspaceID)
+				if guardErr != nil {
+					writeError(w, http.StatusInternalServerError, "failed to apply project visibility")
+					return
+				}
+				if blocked {
+					writeError(w, http.StatusForbidden, "operation requires project-aware authorization")
+					return
+				}
+				if shouldR2DFilterCollection(scoped) {
+					serveR2DFilteredCollection(queries, w, scoped, next, userID)
+					return
+				}
 			}
 			next.ServeHTTP(w, scoped)
 		})
