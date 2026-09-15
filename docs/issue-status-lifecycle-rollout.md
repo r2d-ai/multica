@@ -99,9 +99,11 @@ Release sequence:
    custom-status automation inheritance; upgrading the daemon is required to
    replace those instructions. Do not automatically restart or replay tasks.
 
-**Phase 2 is a separate PR/job, not implemented by phase 1.** It must batch by
-an indexed stable key, commit each batch, support dry-run/progress/retry/pause,
-and include system, custom and archived catalog rows. Before starting, prove
+**Phase 2 is an explicitly driven internal API**, documented in
+[the maintenance jobs runbook](maintenance-jobs.md). It uses a shared
+maintenance_job record, one indexed ID page per request, and atomic
+data/checkpoint commits. It supports dry-run/progress/retry/pause and includes
+system, custom and archived catalog rows. Before starting, prove
 all writers use the new format and the compatible backend is fully deployed.
 Set workload limits from the environment's API latency, lock wait, I/O, WAL and
 replication budgets. Pausing the job must leave normal reads/writes working.
