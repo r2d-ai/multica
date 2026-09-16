@@ -17,6 +17,14 @@ type fakeScopeQuerier struct {
 	tasks    map[[16]byte]db.AgentTaskQueue
 	issues   map[[16]byte]db.Issue
 	sessions map[[16]byte]db.ChatSession
+	projects map[string]db.R2DProjectAccessFacts
+}
+
+func (f *fakeScopeQuerier) R2DLoadProjectAccessFacts(_ context.Context, _, projectID string) (db.R2DProjectAccessFacts, error) {
+	if p, ok := f.projects[projectID]; ok {
+		return p, nil
+	}
+	return db.R2DProjectAccessFacts{}, pgx.ErrNoRows
 }
 
 func (f *fakeScopeQuerier) GetAgentTask(_ context.Context, id pgtype.UUID) (db.AgentTaskQueue, error) {
@@ -186,6 +194,46 @@ func TestScopeAuthorizer_IssueTaskWorkspaceOnly(t *testing.T) {
 	}
 }
 
+// TestScopeAuthorizer_ProjectRequiresReadAccess pins the P07-B consumer
+// contract: a client may join ScopeProject only when the central Project policy
+// grants read, regardless of the client's own (home) workspace.
+func TestScopeAuthorizer_ProjectRequiresReadAccess(t *testing.T) {
+	homeWsStr, _ := mustUUID(t)
+	callerStr, _ := mustUUID(t)
+	ownerWsStr, _ := mustUUID(t)
+	grantedStr, _ := mustUUID(t)
+	deniedStr, _ := mustUUID(t)
+	observerStr, _ := mustUUID(t)
+
+	q := &fakeScopeQuerier{projects: map[string]db.R2DProjectAccessFacts{
+		// Explicit cross-workspace grant → read.
+		grantedStr: {ProjectID: grantedStr, OwnerWorkspaceID: ownerWsStr, Visibility: "private", DirectGrantRole: "viewer"},
+		// No grant, no owner-workspace role → no read.
+		deniedStr: {ProjectID: deniedStr, OwnerWorkspaceID: ownerWsStr, Visibility: "private"},
+		// Deployment-wide observer → read.
+		observerStr: {ProjectID: observerStr, OwnerWorkspaceID: ownerWsStr, Visibility: "private", GlobalObserver: true},
+	}}
+	a := newScopeAuthorizer(q)
+	ctx := context.Background()
+
+	if ok, err := a.AuthorizeScope(ctx, callerStr, homeWsStr, realtime.ScopeProject, grantedStr); err != nil || !ok {
+		t.Fatalf("granted collaborator should be allowed: ok=%v err=%v", ok, err)
+	}
+	if ok, err := a.AuthorizeScope(ctx, callerStr, homeWsStr, realtime.ScopeProject, deniedStr); err != nil || ok {
+		t.Fatalf("ungranted caller must be denied: ok=%v err=%v", ok, err)
+	}
+	if ok, err := a.AuthorizeScope(ctx, callerStr, homeWsStr, realtime.ScopeProject, observerStr); err != nil || !ok {
+		t.Fatalf("global observer should be allowed: ok=%v err=%v", ok, err)
+	}
+	if ok, err := a.AuthorizeScope(ctx, "", homeWsStr, realtime.ScopeProject, grantedStr); err != nil || ok {
+		t.Fatalf("empty userID must be denied: ok=%v err=%v", ok, err)
+	}
+	missingStr, _ := mustUUID(t)
+	if ok, err := a.AuthorizeScope(ctx, callerStr, homeWsStr, realtime.ScopeProject, missingStr); err != nil || ok {
+		t.Fatalf("unknown project must be a plain denial: ok=%v err=%v", ok, err)
+	}
+}
+
 // failingScopeQuerier returns a non-ErrNoRows error from every lookup,
 // simulating a transient database failure (pool exhaustion, cancelled
 // context, network blip). Such errors must propagate out of AuthorizeScope
@@ -200,6 +248,9 @@ func (failingScopeQuerier) GetIssue(context.Context, pgtype.UUID) (db.Issue, err
 }
 func (failingScopeQuerier) GetChatSession(context.Context, pgtype.UUID) (db.ChatSession, error) {
 	return db.ChatSession{}, errors.New("connection reset by peer")
+}
+func (failingScopeQuerier) R2DLoadProjectAccessFacts(context.Context, string, string) (db.R2DProjectAccessFacts, error) {
+	return db.R2DProjectAccessFacts{}, errors.New("connection reset by peer")
 }
 
 // errOnInnerQuerier succeeds for GetAgentTask (so the task path reaches its
@@ -217,6 +268,9 @@ func (*errOnInnerQuerier) GetIssue(context.Context, pgtype.UUID) (db.Issue, erro
 }
 func (*errOnInnerQuerier) GetChatSession(context.Context, pgtype.UUID) (db.ChatSession, error) {
 	return db.ChatSession{}, errors.New("connection reset by peer")
+}
+func (*errOnInnerQuerier) R2DLoadProjectAccessFacts(context.Context, string, string) (db.R2DProjectAccessFacts, error) {
+	return db.R2DProjectAccessFacts{}, errors.New("connection reset by peer")
 }
 
 // TestScopeAuthorizer_DoesNotSwallowQueryErrors pins #6037: a real database
@@ -241,6 +295,10 @@ func TestScopeAuthorizer_DoesNotSwallowQueryErrors(t *testing.T) {
 	// Point 4: GetChatSession fails on the chat path.
 	if _, err := a.AuthorizeScope(ctx, userStr, wsStr, realtime.ScopeChat, chatScopeStr); err == nil {
 		t.Fatalf("chat-path GetChatSession error must propagate, got err=nil")
+	}
+	// Point 5: Project facts lookup fails on the project path.
+	if _, err := a.AuthorizeScope(ctx, userStr, wsStr, realtime.ScopeProject, chatScopeStr); err == nil {
+		t.Fatalf("project-path R2DLoadProjectAccessFacts error must propagate, got err=nil")
 	}
 
 	// Point 2: GetIssue fails (task resolves to an issue task).

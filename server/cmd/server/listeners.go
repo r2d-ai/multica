@@ -76,7 +76,11 @@ func projectOutbound(eventType string, payload any) any {
 // for a Redis-backed relay or a feature-flagged dual-write implementation
 // without touching any of the event listeners below. This is Phase 0 of the
 // horizontal-scaling plan tracked in MUL-1138.
-func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
+//
+// projectScope resolves an issue's owning Project so issue events can also fan
+// out to ScopeProject (cross-Workspace collaborators). It may be nil, in which
+// case no Project fanout happens — the pre-P07-B behavior.
+func registerListeners(bus *events.Bus, b realtime.Broadcaster, projectScope projectScopeResolver) {
 	// Personal events should NOT be broadcast to the whole workspace.
 	personalEvents := map[string]bool{
 		protocol.EventInboxNew:           true,
@@ -253,6 +257,11 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 		if e.WorkspaceID != "" {
 			realtime.M.RecordEvent(e.Type)
 			b.BroadcastToWorkspace(e.WorkspaceID, data)
+			// Project-scoped fanout is additive: the owner Workspace still
+			// receives the event, and a foreign collaborator subscribed to
+			// ScopeProject receives a leak-filtered copy. Projectless issues
+			// and non-issue event types never reach this path.
+			broadcastProjectScoped(e, b, projectScope)
 		} else if strings.HasPrefix(e.Type, "daemon:") {
 			realtime.M.RecordEvent(e.Type)
 			b.Broadcast(data)

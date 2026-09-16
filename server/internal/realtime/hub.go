@@ -980,26 +980,12 @@ func (c *Client) handleSubscribe(scope, id string) {
 		}
 		// Already auto-subscribed at connect time; reply ack idempotently.
 		c.hub.subscribe(c, scope, id)
-	case ScopeTask, ScopeChat:
-		auth := c.hub.authorizer
-		if auth != nil {
-			ok, err := auth.AuthorizeScope(context.Background(), c.userID, c.workspaceID, scope, id)
-			if err != nil || !ok {
-				M.SubscribeDeniedTotal(scope).Add(1)
-				reason := "forbidden"
-				if err != nil {
-					reason = "lookup_failed"
-				}
-				c.sendJSON(map[string]any{
-					"type": "subscribe_error",
-					"payload": map[string]string{
-						"scope": scope,
-						"id":    id,
-						"error": reason,
-					},
-				})
-				return
-			}
+	case ScopeTask, ScopeChat, ScopeProject:
+		// Resource-backed scopes are gated by the ScopeAuthorizer. ScopeProject
+		// is fail-closed when no authorizer is wired: a cross-Workspace room
+		// must not be joinable just because authorization was misconfigured.
+		if !c.authorizeScopedSubscription(scope, id) {
+			return
 		}
 		c.hub.subscribe(c, scope, id)
 	default:
@@ -1017,6 +1003,47 @@ func (c *Client) handleSubscribe(scope, id string) {
 	c.sendJSON(map[string]any{
 		"type":    "subscribe_ack",
 		"payload": map[string]string{"scope": scope, "id": id},
+	})
+}
+
+// authorizeScopedSubscription runs the ScopeAuthorizer for a resource-backed
+// scope and replies with a subscribe_error frame when the caller is refused.
+// The result is never cached on the client: re-joining a scope always re-checks
+// the ACL, so a grant revoked mid-connection stops working on the next join.
+//
+// ScopeProject is fail-closed when no authorizer is configured (see
+// handleSubscribe); the workspace/user/task/chat scopes keep the historical
+// optimistic behavior and instead rely on the authorizer being wired.
+func (c *Client) authorizeScopedSubscription(scope, id string) bool {
+	auth := c.hub.authorizer
+	if auth == nil {
+		if scope != ScopeProject {
+			return true
+		}
+		c.denySubscription(scope, id, "forbidden")
+		return false
+	}
+	ok, err := auth.AuthorizeScope(context.Background(), c.userID, c.workspaceID, scope, id)
+	if err != nil {
+		c.denySubscription(scope, id, "lookup_failed")
+		return false
+	}
+	if !ok {
+		c.denySubscription(scope, id, "forbidden")
+		return false
+	}
+	return true
+}
+
+func (c *Client) denySubscription(scope, id, reason string) {
+	M.SubscribeDeniedTotal(scope).Add(1)
+	c.sendJSON(map[string]any{
+		"type": "subscribe_error",
+		"payload": map[string]string{
+			"scope": scope,
+			"id":    id,
+			"error": reason,
+		},
 	})
 }
 

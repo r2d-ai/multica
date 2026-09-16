@@ -49,7 +49,7 @@ func TestRegisterListeners_FrameContainsActorType(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bus := events.New()
 			fb := &fakeBroadcaster{}
-			registerListeners(bus, fb)
+			registerListeners(bus, fb, nil)
 
 			bus.Publish(tc.event)
 

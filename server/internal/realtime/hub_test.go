@@ -174,6 +174,118 @@ func TestClientHandleSubscribeReportsLookupFailure(t *testing.T) {
 	}
 }
 
+// allowScopeAuthorizer allows only the exact "scope:type" pairs in its set.
+type allowScopeAuthorizer struct{ allow map[string]bool }
+
+func (a allowScopeAuthorizer) AuthorizeScope(_ context.Context, _, _, scopeType, scopeID string) (bool, error) {
+	return a.allow[scopeType+":"+scopeID], nil
+}
+
+func newSubscribingTestClient(hub *Hub) *Client {
+	return &Client{
+		hub:           hub,
+		send:          make(chan []byte, 8),
+		userID:        testUserID,
+		workspaceID:   testWorkspaceID,
+		subscriptions: make(map[scopeKey]bool),
+	}
+}
+
+func decodeSubscribeFrame(t *testing.T, raw []byte) (string, map[string]string) {
+	t.Helper()
+	var frame struct {
+		Type    string            `json:"type"`
+		Payload map[string]string `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &frame); err != nil {
+		t.Fatalf("unmarshal subscribe frame: %v", err)
+	}
+	return frame.Type, frame.Payload
+}
+
+// TestClientHandleSubscribe_ProjectScopeRequiresAuthorization pins the P07-B
+// consumer contract: ScopeProject is joinable only when the ScopeAuthorizer
+// admits the principal, and a denial leaves the client out of the room.
+func TestClientHandleSubscribe_ProjectScopeRequiresAuthorization(t *testing.T) {
+	hub := NewHub()
+	hub.SetAuthorizer(allowScopeAuthorizer{allow: map[string]bool{
+		ScopeProject + ":project-allowed": true,
+	}})
+	client := newSubscribingTestClient(hub)
+	hub.mu.Lock()
+	hub.clients[client] = true
+	hub.mu.Unlock()
+
+	client.handleSubscribe(ScopeProject, "project-allowed")
+	frameType, payload := decodeSubscribeFrame(t, <-client.send)
+	if frameType != "subscribe_ack" {
+		t.Fatalf("allowed project scope frame = %q (%v), want subscribe_ack", frameType, payload)
+	}
+	if !hub.HasLocalSubscribers(ScopeProject, "project-allowed") {
+		t.Fatal("authorized project subscription was not registered on the hub")
+	}
+
+	client.handleSubscribe(ScopeProject, "project-denied")
+	frameType, payload = decodeSubscribeFrame(t, <-client.send)
+	if frameType != "subscribe_error" || payload["error"] != "forbidden" {
+		t.Fatalf("denied project scope frame = %q (%v), want subscribe_error forbidden", frameType, payload)
+	}
+	if hub.HasLocalSubscribers(ScopeProject, "project-denied") {
+		t.Fatal("denied project subscription must not join the room")
+	}
+}
+
+// TestClientHandleSubscribe_ProjectScopeFailsClosedWithoutAuthorizer guards the
+// misconfiguration path: no authorizer must not mean "anyone may join a
+// cross-Workspace Project room".
+func TestClientHandleSubscribe_ProjectScopeFailsClosedWithoutAuthorizer(t *testing.T) {
+	hub := NewHub()
+	client := newSubscribingTestClient(hub)
+	hub.mu.Lock()
+	hub.clients[client] = true
+	hub.mu.Unlock()
+
+	client.handleSubscribe(ScopeProject, "project-1")
+
+	frameType, payload := decodeSubscribeFrame(t, <-client.send)
+	if frameType != "subscribe_error" {
+		t.Fatalf("frame = %q (%v), want subscribe_error", frameType, payload)
+	}
+	if hub.HasLocalSubscribers(ScopeProject, "project-1") {
+		t.Fatal("project scope joined with no authorizer; must fail closed")
+	}
+}
+
+// TestHub_ProjectScopeFanoutIsolatedFromWorkspaceRoom is the delivery half of
+// the P07-B contract: a client subscribed to ScopeProject receives project
+// events, and a client that only holds the owner ScopeWorkspace room does not
+// receive them through the project room.
+func TestHub_ProjectScopeFanoutIsolatedFromWorkspaceRoom(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	projectClient := newSubscribingTestClient(hub)
+	workspaceOnlyClient := newSubscribingTestClient(hub)
+	hub.register <- projectClient
+	hub.register <- workspaceOnlyClient
+	waitFor(t, "clients registered", func() bool { return totalClients(hub) == 2 })
+
+	hub.subscribe(projectClient, ScopeProject, "project-1")
+
+	hub.BroadcastToScope(ScopeProject, "project-1", []byte(`{"type":"issue:created"}`))
+
+	select {
+	case <-projectClient.send:
+	case <-time.After(time.Second):
+		t.Fatal("project subscriber did not receive the project-scoped event")
+	}
+	select {
+	case msg := <-workspaceOnlyClient.send:
+		t.Fatalf("workspace-only client received a project-scoped event: %s", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 // totalClients counts all currently registered clients.
 func totalClients(hub *Hub) int {
 	hub.mu.RLock()

@@ -217,6 +217,38 @@ func TestDualWriteBroadcasterFansOutLocallyBeforePublishing(t *testing.T) {
 	}
 }
 
+// TestDeliverEnvelopeRoutesProjectScopeToProjectRoom pins the P07-B relay
+// contract: a ScopeProject envelope is a first-class scope. The generic
+// delivery path must route it to that Project's local room and must not leak it
+// into the owner Workspace room.
+func TestDeliverEnvelopeRoutesProjectScopeToProjectRoom(t *testing.T) {
+	hub := NewHub()
+	projectClient := attachRealtimeTestClient(hub, ScopeProject, "project-1")
+	workspaceClient := attachRealtimeTestClient(hub, ScopeWorkspace, "workspace-1")
+
+	frame := []byte(`{"type":"issue:created"}`)
+	ev := newEnvelope("node-1", ScopeProject, "project-1", "", frame, "evt-project-1")
+	deliverEnvelope(hub, nil, nil, ev)
+
+	select {
+	case msg := <-projectClient.send:
+		var decoded map[string]any
+		if err := json.Unmarshal(msg, &decoded); err != nil {
+			t.Fatalf("project frame is not JSON: %v", err)
+		}
+		if decoded["event_id"] != "evt-project-1" {
+			t.Fatalf("project frame event_id = %v, want evt-project-1", decoded["event_id"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("project-scoped envelope was not delivered to the project room")
+	}
+	select {
+	case msg := <-workspaceClient.send:
+		t.Fatalf("owner Workspace room received a project-scoped envelope: %s", msg)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func attachRealtimeTestClient(hub *Hub, scopeType, scopeID string) *Client {
 	client := &Client{
 		send:          make(chan []byte, 2),

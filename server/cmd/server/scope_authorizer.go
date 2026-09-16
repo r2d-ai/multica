@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/r2dauth"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -18,14 +20,17 @@ type scopeAuthQuerier interface {
 	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error)
 	GetIssue(ctx context.Context, id pgtype.UUID) (db.Issue, error)
 	GetChatSession(ctx context.Context, id pgtype.UUID) (db.ChatSession, error)
+	R2DLoadProjectAccessFacts(ctx context.Context, userID, projectID string) (db.R2DProjectAccessFacts, error)
 }
 
-// dbScopeAuthorizer implements realtime.ScopeAuthorizer for the per-task and
-// per-chat scopes (workspace/user scopes are validated by the hub itself
-// against the connection identity). It returns true only when the requested
-// resource exists, belongs to the caller's workspace, and — for chat
-// resources — was created by the caller (mirroring the HTTP creator-only
-// access model).
+// dbScopeAuthorizer implements realtime.ScopeAuthorizer for the per-task,
+// per-chat, and per-project scopes (workspace/user scopes are validated by the
+// hub itself against the connection identity). For task/chat it returns true
+// only when the requested resource exists, belongs to the caller's workspace,
+// and — for chat resources — was created by the caller (mirroring the HTTP
+// creator-only access model). For project it defers to the central R2D project
+// policy, which is not workspace-bound: a shared project may be owned by
+// another workspace.
 type dbScopeAuthorizer struct{ q scopeAuthQuerier }
 
 func newScopeAuthorizer(q scopeAuthQuerier) *dbScopeAuthorizer { return &dbScopeAuthorizer{q: q} }
@@ -106,7 +111,37 @@ func (a *dbScopeAuthorizer) AuthorizeScope(ctx context.Context, userID, workspac
 			return false, nil
 		}
 		return true, nil
+	case realtime.ScopeProject:
+		// Cross-Workspace Project room. The connection's workspaceID is the
+		// collaborator's HOME workspace (HandleWebSocket checks membership in
+		// it) and is deliberately not consulted here: Project authorization is
+		// resolved from the Project's own facts, which may belong to another
+		// workspace. Read access is the join requirement — the same predicate
+		// the HTTP Project read path uses (r2dauth.Resolve(...).Can(read)).
+		if strings.TrimSpace(userID) == "" {
+			return false, nil
+		}
+		facts, err := a.q.R2DLoadProjectAccessFacts(ctx, userID, scopeID)
+		if err != nil {
+			return scopeLookupErr(err)
+		}
+		return r2dauth.Resolve(r2dScopeProjectFacts(facts)).Can(r2dauth.OperationRead), nil
 	default:
 		return false, nil
+	}
+}
+
+// r2dScopeProjectFacts maps the storage projection onto the single policy
+// input type. Policy stays in r2dauth.Resolve so the realtime join check cannot
+// drift from the HTTP Project authorization.
+func r2dScopeProjectFacts(f db.R2DProjectAccessFacts) r2dauth.ProjectFacts {
+	return r2dauth.ProjectFacts{
+		ProjectID:          f.ProjectID,
+		OwnerWorkspaceID:   f.OwnerWorkspaceID,
+		Visibility:         r2dauth.Visibility(f.Visibility),
+		OwnerWorkspaceRole: r2dauth.WorkspaceRole(f.OwnerWorkspaceRole),
+		DirectGrantRole:    r2dauth.ProjectRole(f.DirectGrantRole),
+		WorkspaceGrantRole: r2dauth.ProjectRole(f.WorkspaceGrantRole),
+		GlobalObserver:     f.GlobalObserver,
 	}
 }

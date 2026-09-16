@@ -22,7 +22,7 @@ type fakeBroadcaster struct {
 func TestRegisterListeners_ChatSessionCreatedGoesOnlyToCreator(t *testing.T) {
 	bus := events.New()
 	fb := &fakeBroadcaster{}
-	registerListeners(bus, fb)
+	registerListeners(bus, fb, nil)
 
 	bus.Publish(events.Event{
 		Type: protocol.EventChatSessionCreated, WorkspaceID: "ws-1",
@@ -53,7 +53,7 @@ func TestRegisterListeners_ChatSessionCreatedGoesOnlyToCreator(t *testing.T) {
 func TestRegisterListeners_ChatSessionTitleUpdateGoesOnlyToCreator(t *testing.T) {
 	bus := events.New()
 	fb := &fakeBroadcaster{}
-	registerListeners(bus, fb)
+	registerListeners(bus, fb, nil)
 
 	bus.Publish(events.Event{
 		Type: protocol.EventChatSessionUpdated, WorkspaceID: "ws-1",
@@ -129,7 +129,7 @@ func TestRegisterListeners_TaskChatGoToWorkspace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bus := events.New()
 			fb := &fakeBroadcaster{}
-			registerListeners(bus, fb)
+			registerListeners(bus, fb, nil)
 
 			bus.Publish(events.Event{
 				Type:          tc.eventType,
