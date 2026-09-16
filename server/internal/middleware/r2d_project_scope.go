@@ -42,8 +42,37 @@ func r2dAuthorizeProject(queries *db.Queries, r *http.Request, userID, projectID
 	if err != nil {
 		return "", false, false, err
 	}
-	decision := r2dauth.Resolve(r2dFacts(facts))
+	projectFacts := r2dFacts(facts)
+
+	// Project resources are Workspace-owned execution metadata, not merely
+	// Project content. They can expose repository URLs, daemon ids and local
+	// filesystem paths. A cross-Workspace Project grant therefore never makes
+	// the resource collection readable or writable. Owner-Workspace humans may
+	// read it; mutations additionally require Project manage.
+	if r2dProjectResourceRequest(r.URL.Path, projectID) {
+		caps := r2dauth.ResolveCapabilities(projectFacts)
+		switch op {
+		case r2dauth.OperationRead:
+			// On a mutating HTTP request this is the fallback read check used
+			// below to choose 403 vs 404, so test Project readability rather
+			// than resource visibility in that specific case.
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				return facts.OwnerWorkspaceID, caps.Read, true, nil
+			}
+			return facts.OwnerWorkspaceID, caps.ViewResources, true, nil
+		case r2dauth.OperationManage:
+			return facts.OwnerWorkspaceID, caps.ViewResources && caps.Manage, true, nil
+		}
+	}
+
+	decision := r2dauth.Resolve(projectFacts)
 	return facts.OwnerWorkspaceID, decision.Can(op), true, nil
+}
+
+func r2dProjectResourceRequest(path, projectID string) bool {
+	path = strings.TrimSuffix(path, "/")
+	prefix := "/api/projects/" + projectID + "/resources"
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
 func r2dProjectOperation(r *http.Request, suffix string) r2dauth.Operation {
