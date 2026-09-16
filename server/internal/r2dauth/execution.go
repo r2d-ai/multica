@@ -43,6 +43,10 @@ type TaskExecutionFacts struct {
 	ProjectID          string
 	ResolvedProjectID  string
 	ProjectWorkspaceID string
+	// Resources are the Project resource rows bound to ProjectID, loaded by the
+	// store without a caller-supplied filter. The policy admits only rows whose
+	// own WorkspaceID equals ProjectWorkspaceID; see TaskResourceScope.
+	Resources []TaskResourceFact
 }
 
 type TaskExecutionDenyReason string
@@ -57,6 +61,7 @@ const (
 	TaskExecutionDenyMalformedProjectBinding  TaskExecutionDenyReason = "malformed_project_binding"
 	TaskExecutionDenyStaleProject             TaskExecutionDenyReason = "stale_project"
 	TaskExecutionDenyProjectWorkspaceMismatch TaskExecutionDenyReason = "project_workspace_mismatch"
+	TaskExecutionDenyResourceScopeUnresolved  TaskExecutionDenyReason = "resource_scope_unresolved"
 )
 
 // TaskExecutionDecision is the reusable P06 execution result. WorkspaceID is
@@ -73,6 +78,11 @@ type TaskExecutionDecision struct {
 	SquadID            string
 	ProjectID          string
 	ProjectWorkspaceID string
+	// ResourceScope is the Project resource handoff derived from the
+	// authoritative Project-Workspace binding. It is populated only for an
+	// allowed Project-scoped task; projectless tasks keep the zero value and
+	// consume their Agent Workspace resources through the normal Workspace path.
+	ResourceScope TaskResourceScope
 }
 
 func denyTaskExecution(reason TaskExecutionDenyReason) TaskExecutionDecision {
@@ -110,7 +120,7 @@ func ResolveTaskExecution(actor TaskExecutionActor, f TaskExecutionFacts) TaskEx
 	// Direct chat/autopilot/other non-issue tasks remain bound only to the
 	// Agent's Workspace. They do not acquire Project scope implicitly.
 	if f.TaskIssueID == "" {
-		if f.ResolvedIssueID != "" || f.IssueWorkspaceID != "" || f.ProjectID != "" || f.ResolvedProjectID != "" || f.ProjectWorkspaceID != "" {
+		if f.ResolvedIssueID != "" || f.IssueWorkspaceID != "" || f.ProjectID != "" || f.ResolvedProjectID != "" || f.ProjectWorkspaceID != "" || len(f.Resources) > 0 {
 			return denyTaskExecution(TaskExecutionDenyMalformedProjectBinding)
 		}
 		return allowed
@@ -126,7 +136,7 @@ func ResolveTaskExecution(actor TaskExecutionActor, f TaskExecutionFacts) TaskEx
 	// An issue without a Project is ordinary Workspace work. Cross-Workspace
 	// execution is only legal when an explicit Project binding exists.
 	if f.ProjectID == "" {
-		if f.ResolvedProjectID != "" || f.ProjectWorkspaceID != "" {
+		if f.ResolvedProjectID != "" || f.ProjectWorkspaceID != "" || len(f.Resources) > 0 {
 			return denyTaskExecution(TaskExecutionDenyMalformedProjectBinding)
 		}
 		if f.IssueWorkspaceID != f.AgentWorkspaceID {
@@ -148,6 +158,15 @@ func ResolveTaskExecution(actor TaskExecutionActor, f TaskExecutionFacts) TaskEx
 
 	allowed.ProjectID = f.ProjectID
 	allowed.ProjectWorkspaceID = f.ProjectWorkspaceID
+	// P06-D: the resource handoff is part of the decision, not a separate
+	// caller-supplied lookup. A Project-scoped task that cannot resolve its
+	// scope fails closed rather than falling back to the Agent Workspace's own
+	// resources.
+	scope, ok := ResolveTaskResourceScope(allowed, f.Resources)
+	if !ok {
+		return denyTaskExecution(TaskExecutionDenyResourceScopeUnresolved)
+	}
+	allowed.ResourceScope = scope
 	return allowed
 }
 
@@ -196,9 +215,26 @@ LEFT JOIN project ON project.id = issue.project_id
 WHERE task.id = $1::uuid
 `
 
+// taskResourceFactsSQL selects by project_id only. Filtering to the Project
+// owner Workspace is the POLICY's job (see ResolveTaskResourceScope): a SQL
+// predicate would hide the very mismatch the decision must reject, and would
+// make the policy untestable with a corrupt row.
+const taskResourceFactsSQL = `
+SELECT
+    resource.id::text,
+    resource.workspace_id::text,
+    resource.resource_type,
+    resource.resource_ref::text,
+    COALESCE(resource.label, '')
+FROM project_resource resource
+WHERE resource.project_id = $1::uuid
+ORDER BY resource.position ASC, resource.created_at ASC
+`
+
 // LoadTaskExecutionFacts deliberately follows only authoritative server-side
-// relationships: task -> agent and task -> issue -> project. It never reads
-// r2d_project_grants, member roles, X-User-ID, or a caller-provided Project ID.
+// relationships: task -> agent, task -> issue -> project, and the Project's
+// resource rows. It never reads r2d_project_grants, member roles, X-User-ID, or
+// a caller-provided Project ID.
 func (s *PostgresStore) LoadTaskExecutionFacts(ctx context.Context, taskID string) (TaskExecutionFacts, error) {
 	var f TaskExecutionFacts
 	err := s.db.QueryRow(ctx, taskExecutionFactsSQL, taskID).Scan(
@@ -219,5 +255,40 @@ func (s *PostgresStore) LoadTaskExecutionFacts(ctx context.Context, taskID strin
 	if err != nil {
 		return TaskExecutionFacts{}, err
 	}
+	if f.ProjectID == "" {
+		return f, nil
+	}
+	resources, err := s.loadTaskResourceFacts(ctx, f.ProjectID)
+	if err != nil {
+		return TaskExecutionFacts{}, err
+	}
+	f.Resources = resources
 	return f, nil
+}
+
+func (s *PostgresStore) loadTaskResourceFacts(ctx context.Context, projectID string) ([]TaskResourceFact, error) {
+	rows, err := s.db.Query(ctx, taskResourceFactsSQL, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	facts := make([]TaskResourceFact, 0)
+	for rows.Next() {
+		var fact TaskResourceFact
+		if err := rows.Scan(
+			&fact.ID,
+			&fact.WorkspaceID,
+			&fact.ResourceType,
+			&fact.ResourceRef,
+			&fact.Label,
+		); err != nil {
+			return nil, err
+		}
+		facts = append(facts, fact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return facts, nil
 }
