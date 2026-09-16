@@ -9,6 +9,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/r2dauth"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -479,6 +480,14 @@ func notifyIssueSubscribers(
 		})
 	}
 
+	// Cross-Workspace Project collaborators hold no issue_subscriber row in the
+	// owner Workspace, so the loop above can never reach them. Fan out to the
+	// Project's grant principals as well, keyed on targetIssueID (the issue the
+	// change is about) so a parent-bubble pass resolves the same Project and
+	// deduplicates through `notified`.
+	notifyProjectGrantRecipients(ctx, queries, bus, targetIssueID, workspaceID,
+		issueStatus, e, exclude, notified, notifType, severity, title, body, details)
+
 	return notified, tierSuppressed
 }
 
@@ -542,6 +551,165 @@ func notifyDirect(
 		ActorID:     e.ActorID,
 		Payload:     map[string]any{"item": resp},
 	})
+}
+
+// projectFanoutRoles returns the explicit Project roles that must hold a grant
+// to receive this notification type through project-grant fan-out. Action-
+// addressed events require contribute, informational events require read —
+// the same split the central policy uses for OperationContribute vs
+// OperationRead. Roles-to-operation mapping is never re-derived here.
+func projectFanoutRoles(notifType string) []r2dauth.ProjectRole {
+	switch notifType {
+	case "issue_assigned", "unassigned", "mentioned", "task_failed", "agent_blocked":
+		return r2dauth.ProjectRolesForOperation(r2dauth.OperationContribute)
+	default:
+		return r2dauth.ProjectRolesForOperation(r2dauth.OperationRead)
+	}
+}
+
+// resolveProjectGrantRecipients resolves the Project backing issueID and
+// returns the users who reach it through an explicit r2d_project_grants row of
+// a sufficient role. A projectless (or missing) issue returns no recipients:
+// a Project grant never widens a projectless issue.
+//
+// Resolution happens at DELIVERY time, not at subscription time. That is the
+// revocation contract: a grant deleted between the event and its delivery is
+// simply absent from the result, and a member removed from a workspace
+// principal is dropped by the store's inner join.
+func resolveProjectGrantRecipients(
+	ctx context.Context,
+	queries *db.Queries,
+	issueID string,
+	notifType string,
+) map[string]bool {
+	if issueID == "" {
+		return nil
+	}
+
+	target, err := queries.R2DLoadIssueACLTarget(ctx, issueID)
+	if err != nil {
+		slog.Error("project notification fan-out: load issue ACL target failed",
+			"issue_id", issueID, "error", err)
+		return nil
+	}
+	if target.ProjectID == "" {
+		return nil
+	}
+
+	roles := projectFanoutRoles(notifType)
+	roleNames := make([]string, len(roles))
+	for i, role := range roles {
+		roleNames[i] = string(role)
+	}
+
+	grantees, err := queries.R2DListProjectGrantRecipients(ctx, target.ProjectID, roleNames)
+	if err != nil {
+		slog.Error("project notification fan-out: list grant recipients failed",
+			"issue_id", issueID, "project_id", target.ProjectID, "error", err)
+		return nil
+	}
+
+	recipients := make(map[string]bool, len(grantees))
+	for _, grantee := range grantees {
+		if grantee.UserID != "" {
+			recipients[grantee.UserID] = true
+		}
+	}
+	return recipients
+}
+
+// notifyProjectGrantRecipients creates an inbox item for every Project-grant
+// recipient of targetIssueID that the ordinary subscriber pass did not already
+// cover. These are the cross-Workspace collaborators: they hold a grant on the
+// Project but no row in issue_subscriber, so only this fan-out reaches them.
+//
+// Delivery preferences stay per-user: the same loadUserPrefs/isNotifMuted gate
+// the subscriber path uses is applied here too, and notified is mutated so the
+// caller's parent-bubble pass does not deliver the same event twice.
+//
+// The row is written under the issue's owner Workspace, like every other
+// notification here. Surfacing that row back to a foreign collaborator is a
+// read-path concern (their active Workspace is not the owner's), deliberately
+// kept out of this recipient-set change; the recipient_id key means the row
+// can never be read by anyone else in the meantime.
+func notifyProjectGrantRecipients(
+	ctx context.Context,
+	queries *db.Queries,
+	bus *events.Bus,
+	targetIssueID string,
+	workspaceID string,
+	issueStatus string,
+	e events.Event,
+	exclude map[string]bool,
+	notified map[string]bool,
+	notifType string,
+	severity string,
+	title string,
+	body string,
+	details []byte,
+) {
+	recipients := resolveProjectGrantRecipients(ctx, queries, targetIssueID, notifType)
+	if len(recipients) == 0 {
+		return
+	}
+
+	candidates := make([]string, 0, len(recipients))
+	candidateUUIDs := make([]pgtype.UUID, 0, len(recipients))
+	for id := range recipients {
+		if id == e.ActorID || exclude[id] || notified[id] {
+			continue
+		}
+		// principal_id is a TEXT column, so a corrupt row must be skipped, not
+		// allowed to panic the synchronous event bus.
+		recipientUUID, parseErr := util.ParseUUID(id)
+		if parseErr != nil {
+			slog.Warn("project notification fan-out: skipping malformed recipient",
+				"issue_id", targetIssueID, "recipient_id", id, "error", parseErr)
+			continue
+		}
+		candidates = append(candidates, id)
+		candidateUUIDs = append(candidateUUIDs, recipientUUID)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+
+	prefs := loadUserPrefs(ctx, queries, workspaceID, candidates)
+	for i, id := range candidates {
+		if p, ok := prefs[id]; ok && isNotifMuted(p, notifType) {
+			continue
+		}
+		item, err := queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
+			ID:            dbid.NewV7(),
+			WorkspaceID:   parseUUID(workspaceID),
+			RecipientType: "member",
+			RecipientID:   candidateUUIDs[i],
+			Type:          notifType,
+			Severity:      severity,
+			IssueID:       parseUUID(targetIssueID),
+			Title:         title,
+			Body:          util.StrToText(body),
+			ActorType:     util.StrToText(e.ActorType),
+			ActorID:       optionalUUID(e.ActorID),
+			Details:       details,
+		})
+		if err != nil {
+			slog.Error("project grant notification creation failed",
+				"issue_id", targetIssueID, "recipient_id", id, "type", notifType, "error", err)
+			continue
+		}
+
+		notified[id] = true
+		resp := inboxItemToResponse(item)
+		resp["issue_status"] = issueStatus
+		bus.Publish(events.Event{
+			Type:        protocol.EventInboxNew,
+			WorkspaceID: workspaceID,
+			ActorType:   e.ActorType,
+			ActorID:     e.ActorID,
+			Payload:     map[string]any{"item": resp},
+		})
+	}
 }
 
 // notifyMentionedMembers creates inbox items for each @mentioned member,
