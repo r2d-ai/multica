@@ -355,8 +355,8 @@ func newR2DResponseBuffer() *r2dResponseBuffer {
 	return &r2dResponseBuffer{header: make(http.Header), status: http.StatusOK}
 }
 
-func (b *r2dResponseBuffer) Header() http.Header { return b.header }
-func (b *r2dResponseBuffer) WriteHeader(status int) { b.status = status }
+func (b *r2dResponseBuffer) Header() http.Header         { return b.header }
+func (b *r2dResponseBuffer) WriteHeader(status int)      { b.status = status }
 func (b *r2dResponseBuffer) Write(p []byte) (int, error) { return b.body.Write(p) }
 
 func copyR2DResponse(dst http.ResponseWriter, src *r2dResponseBuffer, body []byte) {
