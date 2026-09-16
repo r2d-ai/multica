@@ -25,6 +25,11 @@ const LEGACY_ROUTE_SEGMENTS = new Set([
   "usage",
 ]);
 
+function isCanonicalProjectSharePath(pathname: string): boolean {
+  const segments = pathname.split("/").filter(Boolean);
+  return segments.length === 2 && segments[0] === "projects" && !!segments[1];
+}
+
 function resolveLocale(req: NextRequest): string {
   return resolveLocaleFromSignals({
     cookieLocale: req.cookies.get(LOCALE_COOKIE)?.value,
@@ -57,6 +62,32 @@ export function proxy(req: NextRequest) {
 
   const hasSession = req.cookies.has("multica_logged_in");
   const lastSlug = req.cookies.get("last_workspace_slug")?.value;
+
+  // --- Canonical shared Project link: /projects/{id} ---
+  //
+  // Project ACL does not imply owner-Workspace membership. A copied link must
+  // therefore omit the owner's slug and be re-homed into a Workspace the
+  // recipient actually belongs to. With a last-workspace cookie this is a
+  // cheap redirect. Logged-out visitors keep the canonical URL in `next`
+  // through authentication. A logged-in user with no cookie is allowed through
+  // to the tiny fallback page under app/projects/[projectId], which resolves a
+  // Workspace from the authenticated workspace list instead of looping through
+  // /login.
+  if (isCanonicalProjectSharePath(pathname)) {
+    const url = req.nextUrl.clone();
+    if (!hasSession) {
+      const next = `${pathname}${req.nextUrl.search}`;
+      url.pathname = "/login";
+      url.search = "";
+      url.searchParams.set("next", next);
+      return NextResponse.redirect(url);
+    }
+    if (lastSlug) {
+      url.pathname = `/${lastSlug}${pathname}`;
+      return NextResponse.redirect(url);
+    }
+    return nextWithLocale(req);
+  }
 
   // --- Legacy URL redirect: /issues/... → /{slug}/issues/... ---
   // Old bookmarks and clients that hit us before the slug migration would

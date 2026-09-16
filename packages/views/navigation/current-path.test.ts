@@ -27,4 +27,16 @@ describe("currentPath", () => {
       currentPath(location("/acme/issues/MUL-1", "tab=activity", "#comment-c1")),
     ).toBe("/acme/issues/MUL-1?tab=activity#comment-c1");
   });
+
+  it("removes the workspace slug from copied Project links", () => {
+    expect(
+      currentPath(location("/owner-team/projects/project-1", "view=board", "")),
+    ).toBe("/projects/project-1?view=board");
+  });
+
+  it("leaves the canonical Project hand-off URL unchanged", () => {
+    expect(currentPath(location("/projects/project-1", "", ""))).toBe(
+      "/projects/project-1",
+    );
+  });
 });
