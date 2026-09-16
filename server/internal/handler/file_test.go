@@ -1613,9 +1613,14 @@ func TestGetAttachmentContent_ForeignWorkspace(t *testing.T) {
 
 	id := seedPreviewAttachment(t, store, "ws-mismatch.md", "note.md", "text/markdown", []byte("# secret\n"))
 
-	// Same attachment id, but request comes in scoped to a different workspace.
-	foreign := "00000000-0000-0000-0000-000000000099"
-	req, w := newPreviewRequest(t, id, foreign)
+	// Attachment read authorization is derived from the attachment row (P07-A),
+	// not from the X-Workspace-ID header. A caller who is not a member of the
+	// attachment's Workspace cannot reach it by id, whatever Workspace the
+	// request claims.
+	foreignUser := dbfx.User(t, "Foreign Previewer", fmt.Sprintf("foreign-previewer-%d@multica.ai", time.Now().UnixNano()))
+	foreignWorkspace := dbfx.Workspace(t, "Foreign Preview Workspace", fmt.Sprintf("foreign-preview-ws-%d", time.Now().UnixNano()))
+	req, w := newPreviewRequest(t, id, foreignWorkspace)
+	req.Header.Set("X-User-ID", foreignUser)
 	testHandler.GetAttachmentContent(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())

@@ -406,3 +406,29 @@ FROM issue
 WHERE id = $1::uuid`, issueID).Scan(&target.WorkspaceID, &target.ProjectID)
 	return target, err
 }
+
+// R2DAttachmentACLTarget is the pre-authorization lookup for an attachment. It
+// resolves the attachment's owning Workspace and — when the attachment is bound
+// to a Project-backed Issue, directly or through its comment — that Project.
+//
+// A Projectless attachment (chat, avatar, unbound upload, or an Issue without
+// a Project) returns an empty ProjectID and therefore falls back to the
+// ordinary Workspace gate; a cross-Workspace Project grant never widens it.
+type R2DAttachmentACLTarget struct {
+	WorkspaceID string
+	ProjectID   string
+}
+
+func (q *Queries) R2DLoadAttachmentACLTarget(ctx context.Context, attachmentID string) (R2DAttachmentACLTarget, error) {
+	var target R2DAttachmentACLTarget
+	err := q.db.QueryRow(ctx, `
+SELECT
+    a.workspace_id::text,
+    COALESCE(COALESCE(i.project_id, ci.project_id)::text, '') AS project_id
+FROM attachment a
+LEFT JOIN issue i ON i.id = a.issue_id
+LEFT JOIN comment c ON c.id = a.comment_id
+LEFT JOIN issue ci ON ci.id = c.issue_id
+WHERE a.id = $1::uuid`, attachmentID).Scan(&target.WorkspaceID, &target.ProjectID)
+	return target, err
+}

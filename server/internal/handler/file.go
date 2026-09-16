@@ -744,86 +744,100 @@ func (h *Handler) GetAttachmentByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// loadAttachmentForRequest resolves an attachment for the metadata and preview
+// read paths and enforces the Project ACL itself, so the enforcement does not
+// depend on the Workspace middleware having admitted the caller.
+//
+// R2DAttachmentACLTarget resolves attachment -> Issue -> Project without
+// applying policy; r2dauth remains the sole policy engine. Denial is a
+// non-disclosing 404, never a 403, so the route cannot be used as an IDOR
+// oracle for attachment ids that belong to another Workspace or Project.
 func (h *Handler) loadAttachmentForRequest(w http.ResponseWriter, r *http.Request) (db.Attachment, bool) {
 	attachmentID := chi.URLParam(r, "id")
-	workspaceID := h.resolveWorkspaceID(r)
-	if workspaceID == "" {
-		writeError(w, http.StatusBadRequest, "workspace_id is required")
-		return db.Attachment{}, false
-	}
-
 	attUUID, ok := parseUUIDOrBadRequest(w, attachmentID, "attachment id")
 	if !ok {
 		return db.Attachment{}, false
 	}
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	userID, ok := requireUserID(w, r)
 	if !ok {
 		return db.Attachment{}, false
 	}
 
-	att, err := h.Queries.GetAttachment(r.Context(), db.GetAttachmentParams{
-		ID:          attUUID,
-		WorkspaceID: wsUUID,
-	})
+	target, err := h.Queries.R2DLoadAttachmentACLTarget(r.Context(), attachmentID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return db.Attachment{}, false
 	}
+	allowed, err := h.r2dAuthorizeAttachmentRead(r.Context(), userID, target)
+	if err != nil {
+		slog.Error("failed to authorize attachment read", "attachment_id", attachmentID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to authorize attachment")
+		return db.Attachment{}, false
+	}
+	if !allowed {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return db.Attachment{}, false
+	}
 
+	att, err := h.Queries.GetAttachmentByIDOnly(r.Context(), attUUID)
+	if err != nil || uuidToString(att.WorkspaceID) != target.WorkspaceID {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return db.Attachment{}, false
+	}
 	return att, true
 }
 
 // loadAttachmentForDownload is a workspace-self-resolving variant used by the
 // /api/attachments/{id}/download endpoint. It looks the attachment up by ID
-// alone, then enforces that the authenticated user is a member of the
-// attachment's workspace.
+// alone, then enforces the same Project ACL as loadAttachmentForRequest: a
+// Project-backed attachment follows the Project policy, a projectless one
+// requires Workspace membership.
 //
 // Why a separate code path: a native browser <img>/<video> resource load on
 // /api/attachments/{id}/download cannot attach the X-Workspace-Slug /
-// X-Workspace-ID headers that loadAttachmentForRequest relies on. Putting
-// the workspace into the URL (?workspace_slug=...) would work mechanically
-// but bakes a non-essential identifier into every persisted comment markdown
-// link — unnecessary because the attachment row already records its
-// workspace. This helper keeps the URL clean (`/api/attachments/{id}/download`)
-// and treats the attachment id + cookie/Bearer auth as sufficient.
+// X-Workspace-ID headers that the workspace-scoped metadata route relies on.
+// Putting the workspace into the URL (?workspace_slug=...) would work
+// mechanically but bakes a non-essential identifier into every persisted
+// comment markdown link — unnecessary because the attachment row already
+// records its workspace. This helper keeps the URL clean
+// (`/api/attachments/{id}/download`) and treats the attachment id +
+// cookie/Bearer auth as sufficient.
 //
-// Membership uses the same 404-on-deny shape as ServeLocalUpload so the
-// route does not act as an IDOR oracle for attachment IDs that happen to
-// belong to a different workspace. The membership cache fast path mirrors
-// canReadWorkspaceUpload exactly.
+// Denial uses the same 404-on-deny shape as ServeLocalUpload so the route does
+// not act as an IDOR oracle for attachment IDs that happen to belong to a
+// different workspace or Project.
 func (h *Handler) loadAttachmentForDownload(w http.ResponseWriter, r *http.Request) (db.Attachment, bool) {
 	attachmentID := chi.URLParam(r, "id")
 	attUUID, ok := parseUUIDOrBadRequest(w, attachmentID, "attachment id")
 	if !ok {
 		return db.Attachment{}, false
 	}
-	att, err := h.Queries.GetAttachmentByIDOnly(r.Context(), attUUID)
-	if err != nil {
-		// 404 (not 403/401) so non-member and non-existent look identical
-		// to outside callers. Same shape as ServeLocalUpload's
-		// canReadWorkspaceUpload deny path.
-		writeError(w, http.StatusNotFound, "attachment not found")
-		return db.Attachment{}, false
-	}
-
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return db.Attachment{}, false
 	}
 
-	workspaceID := uuidToString(att.WorkspaceID)
-	if workspaceID == "" {
+	target, err := h.Queries.R2DLoadAttachmentACLTarget(r.Context(), attachmentID)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return db.Attachment{}, false
 	}
-	if h.MembershipCache.Get(r.Context(), userID, workspaceID) {
-		return att, true
+	allowed, err := h.r2dAuthorizeAttachmentRead(r.Context(), userID, target)
+	if err != nil {
+		slog.Error("failed to authorize attachment download", "attachment_id", attachmentID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to authorize attachment")
+		return db.Attachment{}, false
 	}
-	if _, err := h.getWorkspaceMember(r.Context(), userID, workspaceID); err != nil {
+	if !allowed {
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return db.Attachment{}, false
 	}
-	h.MembershipCache.Set(r.Context(), userID, workspaceID)
+
+	att, err := h.Queries.GetAttachmentByIDOnly(r.Context(), attUUID)
+	if err != nil || uuidToString(att.WorkspaceID) != target.WorkspaceID {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return db.Attachment{}, false
+	}
 	return att, true
 }
 
@@ -1444,15 +1458,29 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only the uploader (or workspace admin) can delete
+	// Only the uploader (or workspace admin) can delete, plus a cross-Workspace
+	// Project manager, who has no Workspace member row for the admin rule to
+	// match but does hold manage on the owning Issue's Project.
 	uploaderID := uuidToString(att.UploaderID)
 	isUploader := att.UploaderType == "member" && uploaderID == userID
 	member, hasMember := ctxMember(r.Context())
 	isAdmin := hasMember && (member.Role == "admin" || member.Role == "owner")
 
 	if !isUploader && !isAdmin {
-		writeError(w, http.StatusForbidden, "not authorized to delete this attachment")
-		return
+		target, aclErr := h.Queries.R2DLoadAttachmentACLTarget(r.Context(), attachmentID)
+		allowed := false
+		if aclErr == nil {
+			allowed, aclErr = h.r2dAuthorizeAttachmentManage(r.Context(), userID, target)
+		}
+		if aclErr != nil {
+			slog.Error("failed to authorize attachment delete", "attachment_id", attachmentID, "error", aclErr)
+			writeError(w, http.StatusInternalServerError, "failed to authorize attachment")
+			return
+		}
+		if !allowed {
+			writeError(w, http.StatusForbidden, "not authorized to delete this attachment")
+			return
+		}
 	}
 
 	var deleted db.DeleteAttachmentRow
