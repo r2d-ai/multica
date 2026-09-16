@@ -95,6 +95,47 @@ func (d Decision) HasProjectRole() bool {
 	return d.valid && projectRoleRank(d.Role) > 0
 }
 
+// ProjectCapabilities is the UI-safe projection of one central authorization
+// decision. It exists so clients never need to duplicate role ranking or infer
+// permission from Workspace state. ViewResources is intentionally stricter than
+// Project read: Project resources can carry owner-Workspace repo URLs, daemon
+// ids and local paths, so a cross-Workspace Project grant does not expose them.
+type ProjectCapabilities struct {
+	Role           ProjectRole
+	GlobalObserver bool
+	Read           bool
+	Contribute     bool
+	Manage         bool
+	Share          bool
+	ViewResources  bool
+}
+
+func isHumanOwnerWorkspaceMember(role WorkspaceRole) bool {
+	switch role {
+	case WorkspaceRoleOwner, WorkspaceRoleAdmin, WorkspaceRoleMember:
+		return true
+	default:
+		return false
+	}
+}
+
+// ResolveCapabilities derives every UI-facing capability from the same facts
+// and Decision used by server authorization. Do not duplicate these rules in
+// HTTP handlers or TypeScript.
+func ResolveCapabilities(f ProjectFacts) ProjectCapabilities {
+	d := Resolve(f)
+	read := d.Can(OperationRead)
+	return ProjectCapabilities{
+		Role:           d.Role,
+		GlobalObserver: d.GlobalObserver,
+		Read:           read,
+		Contribute:     d.Can(OperationContribute),
+		Manage:         d.Can(OperationManage),
+		Share:          d.Can(OperationShare),
+		ViewResources:  read && isHumanOwnerWorkspaceMember(f.OwnerWorkspaceRole),
+	}
+}
+
 // Store supplies policy facts without owning policy. Keeping resolution here
 // prevents HTTP handlers and SQL queries from each inventing subtly different
 // ACL semantics.
@@ -117,6 +158,14 @@ func (s *Service) Evaluate(ctx context.Context, userID, projectID string) (Decis
 		return Decision{}, err
 	}
 	return Resolve(facts), nil
+}
+
+func (s *Service) Capabilities(ctx context.Context, userID, projectID string) (ProjectCapabilities, error) {
+	facts, err := s.store.LoadProjectFacts(ctx, userID, projectID)
+	if err != nil {
+		return ProjectCapabilities{}, err
+	}
+	return ResolveCapabilities(facts), nil
 }
 
 func (s *Service) Can(ctx context.Context, userID, projectID string, op Operation) (bool, error) {
