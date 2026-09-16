@@ -249,6 +249,11 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 				if tryR2DProjectScope(queries, w, r, next, userID) {
 					return
 				}
+				// Attachment by-id is Workspace-scoped upstream; a foreign
+				// Project collaborator reaches it through the Project ACL.
+				if tryR2DAttachmentScope(queries, w, r, next, userID) {
+					return
+				}
 			}
 
 			wsUUID, err := util.ParseUUID(workspaceID)
