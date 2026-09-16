@@ -2,9 +2,12 @@ package handler
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
@@ -114,5 +117,71 @@ func TestListProjectResources_TaskTokenIsBoundToAuthorizedProject(t *testing.T) 
 		taskTokenRequest(projectB, taskA, agentID, testWorkspaceID)).Want(http.StatusOK)
 	if strings.Contains(w.Text(), projectARepoURL) {
 		t.Fatalf("rebound task leaked the stale Project A resource: %s", w.Text())
+	}
+}
+
+// P07-E: Project collaboration grants expose Project content, not the owner
+// Workspace's execution metadata. Exercise the real workspace/R2D boundary so
+// a future route or capability regression cannot leak repository URLs, daemon
+// ids, or local paths to a foreign collaborator.
+func TestListProjectResources_HumanPrincipalLeakageMatrix(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	projectID, _ := p07aProjectWithIssue(t, "private")
+	const secretRepoURL = "https://github.com/example/p07e-owner-only"
+	dbfx.Insert(t, "project_resource", testutil.Cols{
+		"project_id":    projectID,
+		"workspace_id":  testWorkspaceID,
+		"resource_type": "github_repo",
+		"resource_ref":  `{"url":"` + secretRepoURL + `"}`,
+		"position":      0,
+	})
+
+	foreignWorkspaceID := dbfx.Workspace(t, "P07E Foreign", "p07e-foreign-"+uuid.NewString())
+	viewer := p07aUser(t, "resource-viewer")
+	p07aGrant(t, projectID, "user", viewer, "viewer")
+	member := p07aUser(t, "resource-member")
+	p07aGrant(t, projectID, "user", member, "member")
+	manager := p07aUser(t, "resource-manager")
+	p07aGrant(t, projectID, "user", manager, "manager")
+	workspaceGrantee := p07aUser(t, "resource-workspace-grantee")
+	dbfx.Member(t, foreignWorkspaceID, workspaceGrantee, "member")
+	p07aGrant(t, projectID, "workspace", foreignWorkspaceID, "member")
+	observer := p07aUser(t, "resource-observer")
+	p07aObserver(t, observer)
+	ungranted := p07aUser(t, "resource-ungranted")
+
+	boundary := middleware.RequireWorkspaceMember(testHandler.Queries)(http.HandlerFunc(testHandler.ListProjectResources))
+	for _, tc := range []struct {
+		name       string
+		userID     string
+		wantStatus int
+		wantSecret bool
+	}{
+		{"owner workspace member", testUserID, http.StatusOK, true},
+		{"foreign direct viewer", viewer, http.StatusForbidden, false},
+		{"foreign direct member", member, http.StatusForbidden, false},
+		{"foreign direct manager", manager, http.StatusForbidden, false},
+		{"foreign workspace grantee", workspaceGrantee, http.StatusForbidden, false},
+		{"global observer", observer, http.StatusForbidden, false},
+		{"ungranted foreign user", ungranted, http.StatusNotFound, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/resources", nil)
+			req.Header.Set("X-User-ID", tc.userID)
+			req.Header.Set("X-Workspace-ID", testWorkspaceID)
+			req = withURLParam(req, "id", projectID)
+			w := httptest.NewRecorder()
+			boundary.ServeHTTP(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, tc.wantStatus, w.Body.String())
+			}
+			if got := strings.Contains(w.Body.String(), secretRepoURL); got != tc.wantSecret {
+				t.Fatalf("secret resource visible = %t, want %t; body=%s", got, tc.wantSecret, w.Body.String())
+			}
+		})
 	}
 }
