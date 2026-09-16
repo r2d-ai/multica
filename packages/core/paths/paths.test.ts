@@ -48,6 +48,7 @@ describe("paths (global)", () => {
     expect(paths.newWorkspace()).toBe("/workspaces/new");
     expect(paths.invite("inv-1")).toBe("/invite/inv-1");
     expect(paths.authCallback()).toBe("/auth/callback");
+    expect(paths.projectShare("project one")).toBe("/projects/project%20one");
   });
 });
 
@@ -57,10 +58,12 @@ describe("isGlobalPath", () => {
     expect(isGlobalPath("/workspaces/new")).toBe(true);
     expect(isGlobalPath("/invite/abc")).toBe(true);
     expect(isGlobalPath("/auth/callback")).toBe(true);
+    expect(isGlobalPath("/projects/project-1")).toBe(true);
   });
 
   it("returns false for workspace-scoped paths", () => {
     expect(isGlobalPath("/acme/issues")).toBe(false);
+    expect(isGlobalPath("/acme/projects/project-1")).toBe(false);
     expect(isGlobalPath("/")).toBe(false);
   });
 });
