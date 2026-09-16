@@ -52,13 +52,13 @@ const (
 // roles mean that source supplied no role. The PostgreSQL store reads these
 // facts from upstream project/member tables plus R2D side tables.
 type ProjectFacts struct {
-	ProjectID            string
-	OwnerWorkspaceID     string
-	Visibility           Visibility
-	OwnerWorkspaceRole   WorkspaceRole
-	DirectGrantRole      ProjectRole
-	WorkspaceGrantRole   ProjectRole
-	GlobalObserver       bool
+	ProjectID          string
+	OwnerWorkspaceID   string
+	Visibility         Visibility
+	OwnerWorkspaceRole WorkspaceRole
+	DirectGrantRole    ProjectRole
+	WorkspaceGrantRole ProjectRole
+	GlobalObserver     bool
 }
 
 // Decision is the resolved authorization state for one Project. GlobalObserver
@@ -93,6 +93,21 @@ func (d Decision) Can(op Operation) bool {
 // membership/grant.
 func (d Decision) HasProjectRole() bool {
 	return d.valid && projectRoleRank(d.Role) > 0
+}
+
+// ProjectRolesForOperation returns the explicit Project roles that satisfy op,
+// weakest first. Callers that classify rows carrying an explicit role — such as
+// a Project-grant recipient fan-out — need this set instead of an unexported
+// rank, and deriving it from Decision.Can keeps the two from drifting: the
+// ladder is defined once.
+func ProjectRolesForOperation(op Operation) []ProjectRole {
+	roles := make([]ProjectRole, 0, 3)
+	for _, role := range []ProjectRole{ProjectRoleViewer, ProjectRoleMember, ProjectRoleManager} {
+		if (Decision{Role: role, valid: true}).Can(op) {
+			roles = append(roles, role)
+		}
+	}
+	return roles
 }
 
 // ProjectCapabilities is the UI-safe projection of one central authorization
