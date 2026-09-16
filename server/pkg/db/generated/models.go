@@ -1239,6 +1239,32 @@ type QuickAction struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type R2dGlobalRole struct {
+	UserID    string             `json:"user_id"`
+	Role      string             `json:"role"`
+	CreatedBy string             `json:"created_by"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type R2dProjectExtra struct {
+	ProjectID  string             `json:"project_id"`
+	Visibility string             `json:"visibility"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type R2dProjectGrant struct {
+	ID            string             `json:"id"`
+	ProjectID     string             `json:"project_id"`
+	PrincipalType string             `json:"principal_type"`
+	PrincipalID   string             `json:"principal_id"`
+	Role          string             `json:"role"`
+	CreatedBy     string             `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type RuntimeProfile struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
