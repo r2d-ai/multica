@@ -104,6 +104,8 @@ func (h *Handler) openVCSSecret(enc string) (string, error) {
 
 // ListVCSConnections (GET /workspaces/{id}/vcs/connections) is member-visible;
 // connect/disconnect are admin-gated by the router. No secrets returned.
+// This inventory deliberately remains Workspace-scoped: a cross-Workspace
+// Project grant never grants access to its owning Workspace's VCS connections.
 func (h *Handler) ListVCSConnections(w http.ResponseWriter, r *http.Request) {
 	workspaceID := chi.URLParam(r, "id")
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
