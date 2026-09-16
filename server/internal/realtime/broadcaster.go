@@ -12,6 +12,14 @@ const (
 	// It is consumed by the daemon WebSocket hub, not by browser clients.
 	ScopeDaemonRuntime = "daemon_runtime"
 
+	// ScopeProject routes Project-scoped issue events to collaborators whose
+	// home Workspace is not the Project owner's. The scope id is the Project
+	// id, and a client may only join it after the Project ACL admits it
+	// (internal/r2dauth). It is a distinct room from ScopeWorkspace on
+	// purpose: a cross-Workspace collaborator must never receive owner
+	// Workspace-only events just because a Project was shared with them.
+	ScopeProject = "project"
+
 	// ScopeWecomOutbound routes a WeCom reply to the replica holding that
 	// installation's aibot WebSocket.
 	//

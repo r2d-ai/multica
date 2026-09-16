@@ -52,7 +52,7 @@ func TestIssueUpdatedBroadcast_OmitsFullPreviousDescription(t *testing.T) {
 		}
 	})
 
-	registerListeners(bus, fb)
+	registerListeners(bus, fb, nil)
 
 	bus.Publish(events.Event{
 		Type:        protocol.EventIssueUpdated,
@@ -188,7 +188,7 @@ func TestTaskFailedBroadcast_DeliversErrorOnlyInProcess(t *testing.T) {
 		m, _ := e.Payload.(map[string]any)
 		inProcessError, _ = m["error"].(string)
 	})
-	registerListeners(bus, fb)
+	registerListeners(bus, fb, nil)
 	bus.Publish(events.Event{
 		Type:        protocol.EventTaskFailed,
 		WorkspaceID: "workspace-1",

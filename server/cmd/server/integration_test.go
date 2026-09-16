@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 	go hub.Run()
 
 	bus := events.New()
-	registerListeners(bus, hub)
+	registerListeners(bus, hub, nil)
 	router := NewRouter(pool, hub, bus, analytics.NoopClient{}, nil)
 	testServer = httptest.NewServer(router)
 
