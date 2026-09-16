@@ -13,27 +13,29 @@ var ErrDispatchTargetNotFound = errors.New("dispatch target not found")
 // written to the task queue. ActorWorkspaceRole is the human caller's role in
 // the Agent-owning Workspace; Project sharing must never synthesize this role.
 type AgentDispatchFacts struct {
-	AgentID             string
-	AgentWorkspaceID    string
-	IssueID             string
-	IssueWorkspaceID    string
-	ProjectID           string
-	ResolvedProjectID   string
-	ProjectWorkspaceID  string
-	ActorWorkspaceRole  WorkspaceRole
+	AgentID            string
+	AgentWorkspaceID   string
+	AgentArchived      bool
+	IssueID            string
+	IssueWorkspaceID   string
+	ProjectID          string
+	ResolvedProjectID  string
+	ProjectWorkspaceID string
+	ActorWorkspaceRole WorkspaceRole
 }
 
 type AgentDispatchDenyReason string
 
 const (
-	AgentDispatchDenyInvalidRequest          AgentDispatchDenyReason = "invalid_request"
-	AgentDispatchDenyTargetMismatch          AgentDispatchDenyReason = "target_mismatch"
-	AgentDispatchDenyAgentWorkspaceMismatch  AgentDispatchDenyReason = "agent_workspace_mismatch"
+	AgentDispatchDenyInvalidRequest           AgentDispatchDenyReason = "invalid_request"
+	AgentDispatchDenyTargetMismatch           AgentDispatchDenyReason = "target_mismatch"
+	AgentDispatchDenyAgentWorkspaceMismatch   AgentDispatchDenyReason = "agent_workspace_mismatch"
+	AgentDispatchDenyAgentUnavailable         AgentDispatchDenyReason = "agent_unavailable"
 	AgentDispatchDenyActorWorkspaceMembership AgentDispatchDenyReason = "actor_workspace_membership"
-	AgentDispatchDenyIssueWorkspaceMismatch  AgentDispatchDenyReason = "issue_workspace_mismatch"
-	AgentDispatchDenyMalformedProjectBinding AgentDispatchDenyReason = "malformed_project_binding"
-	AgentDispatchDenyStaleProject            AgentDispatchDenyReason = "stale_project"
-	AgentDispatchDenyProjectPermission       AgentDispatchDenyReason = "project_permission"
+	AgentDispatchDenyIssueWorkspaceMismatch   AgentDispatchDenyReason = "issue_workspace_mismatch"
+	AgentDispatchDenyMalformedProjectBinding  AgentDispatchDenyReason = "malformed_project_binding"
+	AgentDispatchDenyStaleProject             AgentDispatchDenyReason = "stale_project"
+	AgentDispatchDenyProjectPermission        AgentDispatchDenyReason = "project_permission"
 )
 
 // AgentDispatchDecision is deliberately small. It is an authorization result,
@@ -73,6 +75,9 @@ func ResolveAgentDispatch(actorWorkspaceID, requestedIssueID, requestedAgentID s
 	}
 	if f.AgentWorkspaceID == "" || f.AgentWorkspaceID != actorWorkspaceID {
 		return denyAgentDispatch(AgentDispatchDenyAgentWorkspaceMismatch)
+	}
+	if f.AgentArchived {
+		return denyAgentDispatch(AgentDispatchDenyAgentUnavailable)
 	}
 	if !humanWorkspaceRole(f.ActorWorkspaceRole) {
 		return denyAgentDispatch(AgentDispatchDenyActorWorkspaceMembership)
@@ -123,10 +128,13 @@ func NewAgentDispatchService(store AgentDispatchStore, projects *Service) *Agent
 	return &AgentDispatchService{store: store, projects: projects}
 }
 
-// Authorize proves both halves of an enqueue decision: the caller may invoke
+// Authorize proves both halves of an enqueue decision: the caller may select
 // an Agent owned by the caller's active Workspace, and (for Project Issues) the
-// caller has effective Project contribution permission. The Project owner
-// Workspace never has to equal the Agent Workspace.
+// caller has effective Project contribution permission. Agent invocation mode
+// (private/public_to) is deliberately composed at the handler boundary through
+// the existing canInvokeAgent policy rather than duplicated here.
+//
+// The Project owner Workspace never has to equal the Agent Workspace.
 func (s *AgentDispatchService) Authorize(ctx context.Context, userID, actorWorkspaceID, issueID, agentID string) (AgentDispatchDecision, error) {
 	if userID == "" || actorWorkspaceID == "" || issueID == "" || agentID == "" {
 		return denyAgentDispatch(AgentDispatchDenyInvalidRequest), nil
@@ -156,6 +164,7 @@ const agentDispatchFactsSQL = `
 SELECT
     agent.id::text,
     agent.workspace_id::text,
+    agent.archived_at IS NOT NULL,
     issue.id::text,
     issue.workspace_id::text,
     COALESCE(issue.project_id::text, ''),
@@ -180,6 +189,7 @@ func (s *PostgresStore) LoadAgentDispatchFacts(ctx context.Context, userID, agen
 	err := s.db.QueryRow(ctx, agentDispatchFactsSQL, userID, agentID, issueID).Scan(
 		&f.AgentID,
 		&f.AgentWorkspaceID,
+		&f.AgentArchived,
 		&f.IssueID,
 		&f.IssueWorkspaceID,
 		&f.ProjectID,
