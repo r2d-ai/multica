@@ -102,6 +102,31 @@ func TestShouldR2DFilterCollection(t *testing.T) {
 	}
 }
 
+func TestR2DOpenOnlyQueryClassification(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		body         string
+		wantUnsafe   bool
+		wantFiltered bool
+	}{
+		{"open only", `{"open_only":"true"}`, false, true},
+		{"ordinary query", `{"open_only":"false"}`, false, false},
+		{"open only omitted", `{}`, false, false},
+		{"non-string open only", `{"open_only":true}`, true, false},
+		{"malformed body", `{`, true, false},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest(http.MethodPost, "http://example.test/api/issues/query", strings.NewReader(tt.body))
+		if got := r2dUnfilteredIssueSurface(req); got != tt.wantUnsafe {
+			t.Errorf("%s: unfiltered=%v want %v", tt.name, got, tt.wantUnsafe)
+		}
+		if got := shouldR2DFilterCollection(req); got != tt.wantFiltered {
+			t.Errorf("%s: filtered=%v want %v", tt.name, got, tt.wantFiltered)
+		}
+	}
+}
+
 func TestR2DUnfilteredIssueSurface(t *testing.T) {
 	t.Parallel()
 	id := "11111111-1111-1111-1111-111111111111"

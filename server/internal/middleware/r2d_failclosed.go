@@ -10,20 +10,20 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func r2dQueryIssuesOpenOnly(r *http.Request) bool {
+func r2dQueryIssuesOpenOnly(r *http.Request) (openOnly, valid bool) {
 	fields, err := r2dReadJSONFields(r)
 	if err != nil {
-		return true // malformed body stays fail-closed when hidden Projects exist
+		return false, false
 	}
 	raw, ok := fields["open_only"]
 	if !ok {
-		return false
+		return false, true
 	}
 	var value string
 	if json.Unmarshal(raw, &value) != nil {
-		return true
+		return false, false
 	}
-	return value == "true"
+	return value == "true", true
 }
 
 // r2dUnfilteredIssueSurface reports collection/aggregate paths that still rely
@@ -51,12 +51,13 @@ func r2dUnfilteredIssueSurface(r *http.Request) bool {
 		return false
 	}
 	if path == "/api/issues/query" && r.Method == http.MethodPost {
-		// QueryIssues delegates to ListIssues after rebuilding the URL query.
-		// P04-C2 rewrites the string-map body with readable project_ids first.
-		// open_only is the exception because its legacy static query does not
-		// consume project_ids; keep that mode fail-closed until it gets a native
-		// predicate rather than weakening the boundary.
-		return r2dQueryIssuesOpenOnly(r)
+		// Ordinary QueryIssues requests are constrained before SQL by P04-C2.
+		// Valid open_only requests use the legacy unbounded ListOpenIssues query,
+		// then C3 applies the same batched Project ACL response filter before any
+		// bytes leave the server. Malformed/non-string bodies remain fail-closed so
+		// the temporary guard never becomes an authorization bypass.
+		_, valid := r2dQueryIssuesOpenOnly(r)
+		return !valid
 	}
 	if r.Method == http.MethodPost {
 		switch path {

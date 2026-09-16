@@ -394,6 +394,13 @@ func serveR2DFilteredCollection(queries *db.Queries, w http.ResponseWriter, r *h
 	switch {
 	case path == "/api/issues" || path == "/api/issues/search":
 		key = "issues"
+	case path == "/api/issues/query" && r.Method == http.MethodPost:
+		openOnly, valid := r2dQueryIssuesOpenOnly(r)
+		if !valid || !openOnly {
+			copyR2DResponse(w, buf, buf.body.Bytes())
+			return
+		}
+		key = "issues"
 	default:
 		copyR2DResponse(w, buf, buf.body.Bytes())
 		return
@@ -479,11 +486,15 @@ func filterR2DCollectionJSON(ctx context.Context, queries *db.Queries, userID, k
 }
 
 func shouldR2DFilterCollection(r *http.Request) bool {
-	if r.Method != http.MethodGet {
-		return false
-	}
 	path := strings.TrimSuffix(r.URL.Path, "/")
-	return path == "/api/projects" || path == "/api/projects/search" || path == "/api/issues" || path == "/api/issues/search"
+	if r.Method == http.MethodGet {
+		return path == "/api/projects" || path == "/api/projects/search" || path == "/api/issues" || path == "/api/issues/search"
+	}
+	if r.Method == http.MethodPost && path == "/api/issues/query" {
+		openOnly, valid := r2dQueryIssuesOpenOnly(r)
+		return valid && openOnly
+	}
+	return false
 }
 
 // Tiny helpers keep this file independent of handler/util packages and avoid
