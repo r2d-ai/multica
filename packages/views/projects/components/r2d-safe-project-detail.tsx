@@ -8,7 +8,14 @@ import { useIssuesScope } from "@multica/core/issues/stores";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { useUpdateProject } from "@multica/core/projects/mutations";
 import type { R2DProjectCapabilities } from "@multica/core/projects/r2d-capabilities";
-import type { ProjectPriority, ProjectStatus } from "@multica/core/types";
+import type {
+  ListProjectResourcesResponse,
+  LocalDirectoryResourceRef,
+  GithubRepoResourceRef,
+  ProjectPriority,
+  ProjectStatus,
+  UpdateProjectRequest,
+} from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { IssueSurface } from "../../issues/surface/issue-surface";
 
@@ -47,6 +54,50 @@ function readOnlyProjectIssuesOptions(projectId: string) {
     },
     retry: false,
   };
+}
+
+function projectResourcesOptions(projectId: string, enabled: boolean) {
+  return {
+    queryKey: ["r2d", "project-resources-readonly", projectId] as const,
+    queryFn: () => request<ListProjectResourcesResponse>(`/api/projects/${encodeURIComponent(projectId)}/resources`),
+    enabled,
+    retry: false,
+  };
+}
+
+function resourceSummary(resource: ListProjectResourcesResponse["resources"][number]): string {
+  if (resource.resource_type === "github_repo") {
+    const ref = resource.resource_ref as GithubRepoResourceRef;
+    return ref.url || "Git repository";
+  }
+  if (resource.resource_type === "local_directory") {
+    const ref = resource.resource_ref as LocalDirectoryResourceRef;
+    return ref.local_path || "Local directory";
+  }
+  return resource.resource_type;
+}
+
+function ReadOnlyResources({ projectId }: { projectId: string }) {
+  const resources = useQuery(projectResourcesOptions(projectId, true));
+  if (resources.isLoading) {
+    return <Skeleton className="h-8 w-full max-w-xl" />;
+  }
+  if (resources.isError || !resources.data?.resources.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {resources.data.resources.map((resource) => (
+        <div
+          key={resource.id}
+          className="max-w-full rounded-md border bg-muted/20 px-2 py-1 text-caption text-muted-foreground"
+          title={resourceSummary(resource)}
+        >
+          <span className="font-medium text-foreground">{resource.label || resource.resource_type}</span>
+          <span className="mx-1">·</span>
+          <span className="break-all">{resourceSummary(resource)}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function ReadOnlyIssues({ projectId }: { projectId: string }) {
@@ -111,12 +162,12 @@ export function R2DSafeProjectDetail({
     return <div className="flex h-full flex-1 items-center justify-center text-muted-foreground">Project not found.</div>;
   }
 
-  const update = (data: Parameters<typeof updateProject.mutate>[0]) =>
-    updateProject.mutate({ ...data, id: project.id });
+  const update = (data: UpdateProjectRequest) =>
+    updateProject.mutate({ id: project.id, ...data });
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-      <div className="shrink-0 border-b px-5 py-4 pr-28">
+      <div className="shrink-0 space-y-3 border-b px-5 py-4 pr-28">
         <div className="flex items-start gap-3">
           <span className="mt-1 text-xl" aria-hidden>{project.icon || "📁"}</span>
           <div className="min-w-0 flex-1 space-y-2">
@@ -128,7 +179,7 @@ export function R2DSafeProjectDetail({
                 className="h-9 w-full max-w-2xl rounded-md border bg-background px-2 text-lg font-semibold outline-none focus:border-ring"
                 onBlur={(event) => {
                   const title = event.currentTarget.value.trim();
-                  if (title && title !== project.title) update({ id: project.id, title });
+                  if (title && title !== project.title) update({ title });
                 }}
               />
             ) : (
@@ -144,9 +195,7 @@ export function R2DSafeProjectDetail({
                 className="w-full max-w-3xl resize-y rounded-md border bg-background px-2 py-1.5 text-body-sm outline-none focus:border-ring"
                 onBlur={(event) => {
                   const description = event.currentTarget.value;
-                  if (description !== (project.description ?? "")) {
-                    update({ id: project.id, description });
-                  }
+                  if (description !== (project.description ?? "")) update({ description });
                 }}
               />
             ) : project.description ? (
@@ -160,7 +209,7 @@ export function R2DSafeProjectDetail({
                     value={project.status}
                     aria-label="Project status"
                     className="h-8 rounded-md border bg-background px-2"
-                    onChange={(event) => update({ id: project.id, status: event.target.value as ProjectStatus })}
+                    onChange={(event) => update({ status: event.target.value as ProjectStatus })}
                   >
                     {PROJECT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
                   </select>
@@ -168,21 +217,43 @@ export function R2DSafeProjectDetail({
                     value={project.priority}
                     aria-label="Project priority"
                     className="h-8 rounded-md border bg-background px-2"
-                    onChange={(event) => update({ id: project.id, priority: event.target.value as ProjectPriority })}
+                    onChange={(event) => update({ priority: event.target.value as ProjectPriority })}
                   >
                     {PROJECT_PRIORITIES.map((priority) => <option key={priority} value={priority}>{priority}</option>)}
                   </select>
+                  <label className="flex items-center gap-1">
+                    Start
+                    <input
+                      type="date"
+                      value={project.start_date ?? ""}
+                      onChange={(event) => update({ start_date: event.target.value || null })}
+                      className="h-8 rounded-md border bg-background px-2"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1">
+                    Due
+                    <input
+                      type="date"
+                      value={project.due_date ?? ""}
+                      onChange={(event) => update({ due_date: event.target.value || null })}
+                      className="h-8 rounded-md border bg-background px-2"
+                    />
+                  </label>
                 </>
               ) : (
                 <>
                   <span>{project.status}</span>
                   <span>·</span>
                   <span>{project.priority}</span>
+                  {project.start_date && <><span>·</span><span>Start {project.start_date}</span></>}
+                  {project.due_date && <><span>·</span><span>Due {project.due_date}</span></>}
                 </>
               )}
             </div>
           </div>
         </div>
+
+        {capabilities.view_resources && <ReadOnlyResources projectId={projectId} />}
       </div>
 
       <div className="min-h-0 flex-1">
