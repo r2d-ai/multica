@@ -469,7 +469,16 @@ func (h *Handler) loadProjectForResource(w http.ResponseWriter, r *http.Request,
 }
 
 // ListProjectResources returns the resources attached to a project.
+//
+// A task token is bound to one Workspace, so the ordinary workspace-scoped list
+// would let a run enumerate every Project resource in that Workspace. P06-D
+// binds a task-token read to the single Project the task is authorized to run
+// (resolved server-side from the durable task decision) instead.
 func (h *Handler) ListProjectResources(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Actor-Source") == "task_token" {
+		h.r2dListProjectResourcesForTaskToken(w, r, chi.URLParam(r, "id"))
+		return
+	}
 	project, ok := h.loadProjectForResource(w, r, chi.URLParam(r, "id"))
 	if !ok {
 		return
@@ -947,23 +956,36 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 		return out, nil
 	}
 
+	repos, err := h.claimWorkspaceRepos(ctx, workspaceID)
+	if err != nil {
+		return claimProjectContext{}, err
+	}
+	out.Repos = repos
+	return out, nil
+}
+
+// claimWorkspaceRepos loads a Workspace's fallback repo list for a claim.
+// Corrupt stored JSON is not transient: failing the claim would wedge every
+// claim in this workspace until someone repairs the row, so it degrades to no
+// repos and leaves a trail instead.
+func (h *Handler) claimWorkspaceRepos(ctx context.Context, workspaceID pgtype.UUID) ([]RepoData, error) {
 	ws, err := h.Queries.GetWorkspace(ctx, workspaceID)
 	if err != nil {
-		return claimProjectContext{}, fmt.Errorf("get workspace: %w", err)
+		return nil, fmt.Errorf("get workspace: %w", err)
 	}
-	if ws.Repos != nil {
-		var repos []RepoData
-		if jsonErr := json.Unmarshal(ws.Repos, &repos); jsonErr != nil {
-			// Corrupt stored JSON is not transient: failing the claim would
-			// wedge every claim in this workspace until someone repairs the
-			// row. Degrade to no repos and leave a trail instead.
-			slog.Error("claim project context: workspace repos are not valid JSON; claiming without repos",
-				"workspace_id", uuidToString(workspaceID), "error", jsonErr)
-		} else if len(repos) > 0 {
-			out.Repos = repos
-		}
+	if ws.Repos == nil {
+		return nil, nil
 	}
-	return out, nil
+	var repos []RepoData
+	if jsonErr := json.Unmarshal(ws.Repos, &repos); jsonErr != nil {
+		slog.Error("claim project context: workspace repos are not valid JSON; claiming without repos",
+			"workspace_id", uuidToString(workspaceID), "error", jsonErr)
+		return nil, nil
+	}
+	if len(repos) == 0 {
+		return nil, nil
+	}
+	return repos, nil
 }
 
 // projectResourcesForClaim maps resource rows onto the claim wire shape and

@@ -2569,17 +2569,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			}
 		}
 
-		projectCtx, projectErr := h.resolveClaimProjectContext(r.Context(), issue.ProjectID, issue.WorkspaceID)
-		if projectErr != nil {
-			slog.Error("issue claim: load project context failed; preserving task for redelivery",
-				"task_id", uuidToString(task.ID),
-				"issue_id", uuidToString(issue.ID),
-				"error", projectErr)
-			return resp, deliveredCommentIDs, agentSkillCount, builtinSkillCount, &claimBuildFailure{
-				outcome: "error_project_context",
-				status:  http.StatusInternalServerError,
-				message: "failed to load project context",
-			}
+		projectCtx, projectFailure := h.resolveClaimIssueProjectContext(r.Context(), task, issue, agent)
+		if projectFailure != nil {
+			return resp, deliveredCommentIDs, agentSkillCount, builtinSkillCount, projectFailure
 		}
 		projectCtx.applyTo(&resp)
 

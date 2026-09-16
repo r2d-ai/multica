@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -116,7 +117,7 @@ func (h *Handler) RunProjectIssueAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req r2dProjectAgentRunRequest
-	if err := decodeJSONBody(r, &req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
