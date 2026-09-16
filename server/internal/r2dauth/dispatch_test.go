@@ -96,6 +96,15 @@ func TestAgentDispatchCannotUseForeignOwnerWorkspaceAgent(t *testing.T) {
 	}
 }
 
+func TestAgentDispatchArchivedAgentDenied(t *testing.T) {
+	facts := baseAgentDispatchFacts()
+	facts.AgentArchived = true
+	decision := ResolveAgentDispatch("workspace-b", "issue-a", "agent-b", facts)
+	if decision.Allowed || decision.Reason != AgentDispatchDenyAgentUnavailable {
+		t.Fatalf("expected archived agent denial, got %+v", decision)
+	}
+}
+
 func TestAgentDispatchProjectlessIssueRemainsWorkspaceBound(t *testing.T) {
 	facts := baseAgentDispatchFacts()
 	facts.IssueID = "issue-b"
