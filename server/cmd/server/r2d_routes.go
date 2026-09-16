@@ -11,6 +11,12 @@ import (
 // routes behind the active workspace membership gate would reject legitimate
 // cross-workspace collaborators before r2dauth can evaluate the project.
 func registerR2DProjectSharingRoutes(r chi.Router, h *handler.Handler) {
+	// Resource routes are still owned by upstream and registered later under
+	// RequireWorkspaceMember. Install the R2D guard here, before those routes
+	// are mounted, so shared Project access never exposes the owner Workspace's
+	// repo/runtime/local-directory inventory. Non-resource routes pass through.
+	r.Use(h.ProjectResourceAccess)
+
 	r.Get("/api/projects/{id}/capabilities", h.GetProjectCapabilities)
 
 	r.Route("/api/projects/{id}/sharing", func(r chi.Router) {
