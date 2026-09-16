@@ -4,26 +4,29 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectSharingDialog, R2DProjectDetail } from "./r2d-project-sharing";
 
-const mocks = vi.hoisted(() => ({
-  sharingResult: {} as Record<string, unknown>,
-  directoryResult: {} as Record<string, unknown>,
-  setVisibility: vi.fn(),
-  createGrant: vi.fn(),
-  updateRole: vi.fn(),
-  deleteGrant: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  class MockApiError extends Error {
+    status: number;
 
-class MockApiError extends Error {
-  status: number;
-
-  constructor(status: number) {
-    super(`status ${status}`);
-    this.status = status;
+    constructor(status: number) {
+      super(`status ${status}`);
+      this.status = status;
+    }
   }
-}
+
+  return {
+    MockApiError,
+    sharingResult: {} as Record<string, unknown>,
+    directoryResult: {} as Record<string, unknown>,
+    setVisibility: vi.fn(),
+    createGrant: vi.fn(),
+    updateRole: vi.fn(),
+    deleteGrant: vi.fn(),
+  };
+});
 
 vi.mock("@multica/core/api", () => ({
-  ApiError: MockApiError,
+  ApiError: mocks.MockApiError,
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -116,7 +119,7 @@ describe("R2D project sharing", () => {
       data: undefined,
       isLoading: false,
       isError: true,
-      error: new MockApiError(403),
+      error: new mocks.MockApiError(403),
     };
     rerender(<R2DProjectDetail projectId="project-1" />);
 
