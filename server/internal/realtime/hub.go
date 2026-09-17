@@ -492,11 +492,32 @@ func (h *Hub) BroadcastToScope(scopeType, scopeID string, message []byte) {
 	h.BroadcastToScopeDedup(scopeType, scopeID, message, "")
 }
 
+// projectDeliveryAuthTimeout bounds the per-recipient ACL re-check that runs
+// before a Project-scoped frame is delivered. A timeout is treated exactly like
+// any other authorization error: fail closed and drop the frame.
+const projectDeliveryAuthTimeout = 2 * time.Second
+
+// projectRecipientAuth is the cached authorization result for one recipient
+// within a single Project broadcast. errored distinguishes a transient lookup
+// failure (drop the frame, keep the subscription) from an authoritative denial
+// (drop the frame and evict the stale subscription).
+type projectRecipientAuth struct {
+	allowed bool
+	errored bool
+}
+
 // BroadcastToScopeDedup is the same as BroadcastToScope but skips delivery
 // to clients that have already seen eventID (used by the Redis relay to
 // deduplicate the local fast path of DualWriteBroadcaster).
 func (h *Hub) BroadcastToScopeDedup(scopeType, scopeID string, message []byte, eventID string) {
 	if scopeType == "" || scopeID == "" {
+		return
+	}
+	// ScopeProject is the one scope that crosses a workspace confidentiality
+	// boundary, so membership is re-authorized at delivery time instead of
+	// being trusted for the lifetime of the connection.
+	if scopeType == ScopeProject {
+		h.broadcastToProjectDedup(scopeID, message, eventID)
 		return
 	}
 	key := sk(scopeType, scopeID)
@@ -520,6 +541,100 @@ func (h *Hub) BroadcastToScopeDedup(scopeType, scopeID string, message []byte, e
 
 	if sent > 0 {
 		M.MessagesSentTotal.Add(sent)
+	}
+	if len(slow) > 0 {
+		h.evictSlow(slow)
+	}
+}
+
+// broadcastToProjectDedup delivers a ScopeProject frame only to recipients
+// whose *current* Project ACL still grants read access.
+//
+// Scope membership is authorized once, at join time (handleSubscribe). A direct
+// user grant, a workspace grant, or a workspace membership can all be revoked
+// while a socket stays open, so re-checking at delivery time is the only
+// fail-closed option: a stale room membership must not keep receiving
+// confidential Project content. The check runs once per distinct recipient (not
+// per connection), and a backend error is treated as a denial, so an
+// authorization outage can never widen the boundary.
+//
+// A recipient that is authoritatively denied is evicted from the room so the
+// stale subscription cannot linger; a lookup error only drops this frame and
+// leaves the subscription in place so the next event can try again.
+func (h *Hub) broadcastToProjectDedup(projectID string, message []byte, eventID string) {
+	key := sk(ScopeProject, projectID)
+
+	h.mu.RLock()
+	auth := h.authorizer
+	clients := make([]*Client, 0, len(h.rooms[key]))
+	for client := range h.rooms[key] {
+		clients = append(clients, client)
+	}
+	h.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return
+	}
+	if auth == nil {
+		// No authorizer means Project membership was never verifiable; a room
+		// that should not exist must not receive anything.
+		M.MessagesDroppedTotal.Add(int64(len(clients)))
+		slog.Warn("ws: dropping project-scoped frame with no scope authorizer",
+			"project_id", projectID, "recipients", len(clients))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), projectDeliveryAuthTimeout)
+	defer cancel()
+
+	decisions := make(map[string]projectRecipientAuth, len(clients))
+	var slow []*Client
+	var revoked []*Client
+	var authErr error
+	var sent int64
+	for _, client := range clients {
+		decision, ok := decisions[client.userID]
+		if !ok {
+			allowed, err := auth.AuthorizeScope(ctx, client.userID, client.workspaceID, ScopeProject, projectID)
+			decision = projectRecipientAuth{allowed: err == nil && allowed, errored: err != nil}
+			if err != nil && authErr == nil {
+				authErr = err
+			}
+			decisions[client.userID] = decision
+		}
+		if !decision.allowed {
+			M.MessagesDroppedTotal.Add(1)
+			if !decision.errored {
+				revoked = append(revoked, client)
+			}
+			continue
+		}
+		if !client.markSeen(eventID) {
+			continue
+		}
+		select {
+		case client.send <- message:
+			sent++
+		default:
+			slow = append(slow, client)
+		}
+	}
+
+	if authErr != nil {
+		// Fail closed: an authorization outage must drop the frame rather than
+		// leak it. The subscriptions stay joined so a recovery resumes delivery.
+		slog.Warn("ws: project delivery authorization failed; dropped frame",
+			"project_id", projectID, "error", authErr)
+	}
+	if sent > 0 {
+		M.MessagesSentTotal.Add(sent)
+	}
+	for _, client := range revoked {
+		if h.unsubscribe(client, ScopeProject, projectID) {
+			M.ProjectDeliveryRevokedTotal.Add(1)
+			slog.Info("ws: revoked project subscription",
+				"project_id", projectID, "user_id", client.userID, "workspace_id", client.workspaceID)
+		}
 	}
 	if len(slow) > 0 {
 		h.evictSlow(slow)
@@ -1010,6 +1125,9 @@ func (c *Client) handleSubscribe(scope, id string) {
 // scope and replies with a subscribe_error frame when the caller is refused.
 // The result is never cached on the client: re-joining a scope always re-checks
 // the ACL, so a grant revoked mid-connection stops working on the next join.
+// ScopeProject additionally re-checks the ACL on every delivery (see
+// broadcastToProjectDedup), because for a cross-Workspace room a stale
+// subscription must not keep receiving content until the client reconnects.
 //
 // ScopeProject is fail-closed when no authorizer is configured (see
 // handleSubscribe); the workspace/user/task/chat scopes keep the historical

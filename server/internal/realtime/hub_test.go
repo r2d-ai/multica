@@ -262,6 +262,9 @@ func TestClientHandleSubscribe_ProjectScopeFailsClosedWithoutAuthorizer(t *testi
 // receive them through the project room.
 func TestHub_ProjectScopeFanoutIsolatedFromWorkspaceRoom(t *testing.T) {
 	hub := NewHub()
+	hub.SetAuthorizer(allowScopeAuthorizer{allow: map[string]bool{
+		ScopeProject + ":project-1": true,
+	}})
 	go hub.Run()
 
 	projectClient := newSubscribingTestClient(hub)
@@ -283,6 +286,185 @@ func TestHub_ProjectScopeFanoutIsolatedFromWorkspaceRoom(t *testing.T) {
 	case msg := <-workspaceOnlyClient.send:
 		t.Fatalf("workspace-only client received a project-scoped event: %s", msg)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// mutableScopeAuthorizer lets a test flip a Project decision, or inject a
+// lookup error, after the subscription was already authorized. Decisions are
+// keyed by recipient so a shared room can mix an allowed and a revoked client.
+type mutableScopeAuthorizer struct {
+	mu      sync.Mutex
+	allowed map[string]bool // "userID|scope:id"
+	err     error
+}
+
+func (a *mutableScopeAuthorizer) set(userID, scope, id string, allowed bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.allowed[userID+"|"+scope+":"+id] = allowed
+}
+
+func (a *mutableScopeAuthorizer) setError(err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.err = err
+}
+
+func (a *mutableScopeAuthorizer) AuthorizeScope(_ context.Context, userID, _, scopeType, scopeID string) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.err != nil {
+		return false, a.err
+	}
+	return a.allowed[userID+"|"+scopeType+":"+scopeID], nil
+}
+
+// TestHub_ProjectDeliveryRechecksACLOnEveryEvent pins the P07-B revocation
+// contract: authorization is re-resolved at delivery time, so a grant revoked
+// while the socket stays open stops delivery on the very next event, and the
+// stale subscription is evicted from the room.
+func TestHub_ProjectDeliveryRechecksACLOnEveryEvent(t *testing.T) {
+	hub := NewHub()
+	auth := &mutableScopeAuthorizer{allowed: map[string]bool{}}
+	auth.set(testUserID, ScopeProject, "project-1", true)
+	hub.SetAuthorizer(auth)
+	go hub.Run()
+
+	client := newSubscribingTestClient(hub)
+	hub.register <- client
+	waitFor(t, "client registered", func() bool { return totalClients(hub) == 1 })
+	if !hub.subscribe(client, ScopeProject, "project-1") {
+		t.Fatal("failed to subscribe client to project room")
+	}
+
+	hub.BroadcastToScope(ScopeProject, "project-1", []byte(`{"type":"issue:created"}`))
+	select {
+	case <-client.send:
+	case <-time.After(time.Second):
+		t.Fatal("authorized project subscriber did not receive the event")
+	}
+
+	auth.set(testUserID, ScopeProject, "project-1", false)
+
+	hub.BroadcastToScope(ScopeProject, "project-1", []byte(`{"type":"issue:updated"}`))
+	select {
+	case msg := <-client.send:
+		t.Fatalf("revoked project subscriber received a frame: %s", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if hub.HasLocalSubscribers(ScopeProject, "project-1") {
+		t.Fatal("revoked subscription was not evicted from the project room")
+	}
+}
+
+// TestHub_ProjectDeliveryEvictsOnlyRevokedRecipients verifies the revocation
+// is scoped to the affected principal: a co-subscriber that still holds read
+// access keeps receiving Project events after a peer is revoked.
+func TestHub_ProjectDeliveryEvictsOnlyRevokedRecipients(t *testing.T) {
+	const otherUserID = "other-user"
+	hub := NewHub()
+	auth := &mutableScopeAuthorizer{allowed: map[string]bool{}}
+	auth.set(testUserID, ScopeProject, "project-1", true)
+	auth.set(otherUserID, ScopeProject, "project-1", true)
+	hub.SetAuthorizer(auth)
+	go hub.Run()
+
+	revokedClient := newSubscribingTestClient(hub)
+	keptClient := newSubscribingTestClient(hub)
+	keptClient.userID = otherUserID
+	hub.register <- revokedClient
+	hub.register <- keptClient
+	waitFor(t, "clients registered", func() bool { return totalClients(hub) == 2 })
+	if !hub.subscribe(revokedClient, ScopeProject, "project-1") || !hub.subscribe(keptClient, ScopeProject, "project-1") {
+		t.Fatal("failed to subscribe clients to project room")
+	}
+
+	auth.set(testUserID, ScopeProject, "project-1", false)
+
+	hub.BroadcastToScope(ScopeProject, "project-1", []byte(`{"type":"issue:updated"}`))
+	select {
+	case msg := <-revokedClient.send:
+		t.Fatalf("revoked subscriber received a frame: %s", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case <-keptClient.send:
+	case <-time.After(time.Second):
+		t.Fatal("subscriber that still holds read access did not receive the event")
+	}
+}
+
+// TestHub_ProjectDeliveryFailsClosedOnAuthorizerError pins the outage
+// contract: a lookup error drops the frame instead of leaking it, and does not
+// tear down the subscription, so delivery resumes once the backend recovers.
+func TestHub_ProjectDeliveryFailsClosedOnAuthorizerError(t *testing.T) {
+	hub := NewHub()
+	auth := &mutableScopeAuthorizer{allowed: map[string]bool{}}
+	auth.set(testUserID, ScopeProject, "project-1", true)
+	hub.SetAuthorizer(auth)
+	go hub.Run()
+
+	client := newSubscribingTestClient(hub)
+	hub.register <- client
+	waitFor(t, "client registered", func() bool { return totalClients(hub) == 1 })
+	hub.subscribe(client, ScopeProject, "project-1")
+
+	auth.setError(errors.New("database unavailable"))
+	hub.BroadcastToScope(ScopeProject, "project-1", []byte(`{"type":"issue:updated"}`))
+	select {
+	case msg := <-client.send:
+		t.Fatalf("authorization outage leaked a project frame: %s", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if !hub.HasLocalSubscribers(ScopeProject, "project-1") {
+		t.Fatal("a lookup error must not evict the subscription; the next event retries")
+	}
+
+	auth.setError(nil)
+	hub.BroadcastToScope(ScopeProject, "project-1", []byte(`{"type":"issue:updated"}`))
+	select {
+	case <-client.send:
+	case <-time.After(time.Second):
+		t.Fatal("delivery did not resume after the authorization backend recovered")
+	}
+}
+
+// TestHub_ProjectDeliveryFailsClosedWithoutAuthorizer guards the misconfig
+// path at the delivery half of the boundary.
+func TestHub_ProjectDeliveryFailsClosedWithoutAuthorizer(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	client := newSubscribingTestClient(hub)
+	hub.register <- client
+	waitFor(t, "client registered", func() bool { return totalClients(hub) == 1 })
+	hub.subscribe(client, ScopeProject, "project-1")
+
+	hub.BroadcastToScope(ScopeProject, "project-1", []byte(`{"type":"issue:created"}`))
+	select {
+	case msg := <-client.send:
+		t.Fatalf("project frame delivered with no authorizer: %s", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestHub_WorkspaceFanoutUnaffectedByProjectAuthorizer pins that the delivery
+// gate is Project-only: an owner-Workspace event must not consult the Project
+// authorizer at all.
+func TestHub_WorkspaceFanoutUnaffectedByProjectAuthorizer(t *testing.T) {
+	hub := NewHub()
+	hub.SetAuthorizer(failingScopeAuthorizer{})
+	go hub.Run()
+
+	client := newSubscribingTestClient(hub)
+	hub.register <- client
+	waitFor(t, "client registered", func() bool { return totalClients(hub) == 1 })
+
+	hub.BroadcastToWorkspace(testWorkspaceID, []byte(`{"type":"member:added"}`))
+	select {
+	case <-client.send:
+	case <-time.After(time.Second):
+		t.Fatal("workspace fanout must not consult the project authorizer")
 	}
 }
 

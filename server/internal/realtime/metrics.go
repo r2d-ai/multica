@@ -19,6 +19,11 @@ type Metrics struct {
 	MessagesSentTotal    atomic.Int64
 	MessagesDroppedTotal atomic.Int64
 
+	// ProjectDeliveryRevokedTotal counts ScopeProject subscriptions evicted
+	// because a delivery-time re-authorization found the recipient no longer
+	// holds Project read access (P07-B live revocation).
+	ProjectDeliveryRevokedTotal atomic.Int64
+
 	// InboundTooLargeTotal counts connections closed because a peer sent a
 	// message over inboundReadLimit, on either the pre-auth or the
 	// post-auth read path.
@@ -199,18 +204,19 @@ func (m *Metrics) Snapshot() map[string]any {
 		nodeID, _ = v.(string)
 	}
 	return map[string]any{
-		"connects_total":          m.ConnectsTotal.Load(),
-		"disconnects_total":       m.DisconnectsTotal.Load(),
-		"active_connections":      m.ActiveConnections.Load(),
-		"slow_evictions_total":    m.SlowEvictionsTotal.Load(),
-		"messages_sent_total":     m.MessagesSentTotal.Load(),
-		"messages_dropped_total":  m.MessagesDroppedTotal.Load(),
-		"inbound_too_large_total": m.InboundTooLargeTotal.Load(),
-		"events_sent_by_type":     snapshotCounters(&m.eventSent),
-		"subscribes_total":        snapshotCounters(&m.subscribeTotal),
-		"unsubscribes_total":      snapshotCounters(&m.unsubscribeTotal),
-		"subscribe_denied_total":  snapshotCounters(&m.subscribeDeniedTotal),
-		"active_scope_rooms":      snapshotCounters(&m.scopeRooms),
+		"connects_total":                 m.ConnectsTotal.Load(),
+		"disconnects_total":              m.DisconnectsTotal.Load(),
+		"active_connections":             m.ActiveConnections.Load(),
+		"slow_evictions_total":           m.SlowEvictionsTotal.Load(),
+		"messages_sent_total":            m.MessagesSentTotal.Load(),
+		"messages_dropped_total":         m.MessagesDroppedTotal.Load(),
+		"project_delivery_revoked_total": m.ProjectDeliveryRevokedTotal.Load(),
+		"inbound_too_large_total":        m.InboundTooLargeTotal.Load(),
+		"events_sent_by_type":            snapshotCounters(&m.eventSent),
+		"subscribes_total":               snapshotCounters(&m.subscribeTotal),
+		"unsubscribes_total":             snapshotCounters(&m.unsubscribeTotal),
+		"subscribe_denied_total":         snapshotCounters(&m.subscribeDeniedTotal),
+		"active_scope_rooms":             snapshotCounters(&m.scopeRooms),
 		"redis": map[string]any{
 			"connected":               m.RedisConnected.Load(),
 			"node_id":                 nodeID,
@@ -244,6 +250,7 @@ func (m *Metrics) Reset() {
 	m.SlowEvictionsTotal.Store(0)
 	m.MessagesSentTotal.Store(0)
 	m.MessagesDroppedTotal.Store(0)
+	m.ProjectDeliveryRevokedTotal.Store(0)
 	m.InboundTooLargeTotal.Store(0)
 	m.eventSent.Range(func(k, _ any) bool { m.eventSent.Delete(k); return true })
 	m.subscribeTotal.Range(func(k, _ any) bool { m.subscribeTotal.Delete(k); return true })
