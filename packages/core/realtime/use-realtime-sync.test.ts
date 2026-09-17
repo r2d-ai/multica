@@ -10,6 +10,7 @@ import { chatKeys } from "../chat/queries";
 import { inboxKeys } from "../inbox/queries";
 import { issueKeys } from "../issues/queries";
 import { notificationPreferenceKeys } from "../notification-preferences/queries";
+import { setCurrentWorkspace } from "../platform";
 import { workspaceKeys } from "../workspace/queries";
 import type {
   ChatDonePayload,
@@ -852,6 +853,60 @@ describe("handleInboxNew", () => {
     await handleInboxNew(qc, inboxItem());
 
     expect(showNotification).not.toHaveBeenCalled();
+  });
+
+  // Regression: a Project-grant notification comes from a Workspace the
+  // recipient does not belong to, so its slug cannot be resolved and the banner
+  // used to be emitted with an empty slug — the click was a no-op. The issue
+  // UUID resolves through the Project ACL from any Workspace shell, so the
+  // banner deep-links into the recipient's active Workspace instead.
+  it("deep-links a foreign-workspace issue notification into the active workspace", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [
+      workspace({ id: "ws-b", slug: "workspace-b" }),
+    ]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    const showNotification = stubDesktopAPI();
+    setCurrentWorkspace("workspace-b", "ws-b");
+
+    try {
+      await handleInboxNew(qc, inboxItem({ workspace_id: "ws-a", issue_id: "issue-1" }));
+
+      expect(showNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: "workspace-b", issueKey: "issue-1" }),
+      );
+    } finally {
+      setCurrentWorkspace(null, null);
+    }
+  });
+
+  // Regression: a Project-grant notification row lives under the issue OWNER's
+  // Workspace, so its `workspace_id` is not the collaborator's active
+  // Workspace. The inbox LIST is cached under the active Workspace's key
+  // (`inboxKeys.list(activeWsId)`), while the list endpoint is
+  // recipient-scoped. Invalidating only the item's Workspace refreshed a cache
+  // entry the collaborator never reads, so the item never appeared until a
+  // full reload.
+  it("also refreshes the ACTIVE workspace's inbox list for a foreign-workspace item", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    stubDesktopAPI();
+    setCurrentWorkspace("workspace-b", "ws-b");
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+
+    try {
+      await handleInboxNew(qc, inboxItem({ workspace_id: "ws-a" }));
+
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: inboxKeys.all("ws-a") });
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: inboxKeys.all("ws-b") });
+    } finally {
+      setCurrentWorkspace(null, null);
+    }
   });
 
   // The tests below exercise the COLD-cache mute path (source preference not

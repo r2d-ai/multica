@@ -564,6 +564,15 @@ export async function handleInboxNew(
 ): Promise<void> {
   const sourceWsId = item.workspace_id;
   if (sourceWsId) void onInboxNew(qc, sourceWsId, item);
+  // The inbox LIST is recipient-scoped server-side, so a Project-grant row
+  // written under the issue OWNER's Workspace is served through the ACTIVE
+  // Workspace's list cache. Invalidating only the item's Workspace refreshes a
+  // cache entry this client never reads, leaving the item invisible until a
+  // full reload.
+  const activeWsId = getCurrentWsId();
+  if (activeWsId && activeWsId !== sourceWsId) {
+    void onInboxInvalidate(qc, activeWsId);
+  }
   // A new item in ANY workspace can light the workspace-switcher dot, so
   // refresh the cross-workspace summary regardless of the active workspace.
   void onInboxSummaryInvalidate(qc);
@@ -572,13 +581,13 @@ export async function handleInboxNew(
   // styling is enough — no need to interrupt with a banner. `desktopAPI`
   // is injected by the preload script; its absence (web app) skips silently.
   if (typeof document !== "undefined" && document.hasFocus()) return;
-  // Resolve the source workspace's slug once: it pins BOTH the mute check
-  // and the deep link to the workspace the inbox item BELONGS to, never the
-  // currently active one. Reading `getCurrentSlug()` here was the source of
-  // wrong-workspace routing (#3766): an `inbox:new` from workspace A arriving
-  // while workspace B is active emitted a notification carrying B's slug and
-  // A's issue id, deep-linking to an issue B doesn't have.
-  const slug = await resolveInboxSourceSlug(qc, sourceWsId);
+  // Resolve the source workspace's slug once: it pins the mute check to the
+  // workspace the inbox item BELONGS to, never the currently active one.
+  // Reading `getCurrentSlug()` here was the source of wrong-workspace routing
+  // (#3766): an `inbox:new` from workspace A arriving while workspace B is
+  // active emitted a notification carrying B's slug and A's issue id,
+  // deep-linking to an issue B doesn't have.
+  const sourceSlug = await resolveInboxSourceSlug(qc, sourceWsId);
   // Respect the SOURCE workspace's system-notification preference. Keying the
   // query on `sourceWsId` is not enough: the request resolves its workspace
   // from the `X-Workspace-Slug` header, which follows the ACTIVE workspace —
@@ -590,9 +599,9 @@ export async function handleInboxNew(
   // ("all") rather than swallow the banner.
   if (sourceWsId) {
     try {
-      const prefData = slug
+      const prefData = sourceSlug
         ? await qc.ensureQueryData(
-            notificationPreferenceOptions(sourceWsId, slug),
+            notificationPreferenceOptions(sourceWsId, sourceSlug),
           )
         : qc.getQueryData<NotificationPreferenceResponse>(
             notificationPreferenceKeys.all(sourceWsId),
@@ -605,12 +614,17 @@ export async function handleInboxNew(
   // `issueKey` matches the inbox page's URL selector (issue id when the
   // item is attached to an issue, otherwise the inbox item id). `itemId`
   // is the inbox row's own id, needed to fire markInboxRead on click.
-  // A null slug (workspace list unavailable / item from a workspace this
-  // client can't see) still shows the banner — the user should learn about
-  // the inbox item — but with an empty slug so the click is a no-op
-  // (the inbox bridge ignores empty slugs) instead of routing wrong.
+  //
+  // A null source slug means the item came from a Workspace this client is not
+  // a member of — a Project-grant notification, since the workspace list covers
+  // every Workspace the user belongs to. The issue's UUID resolves through the
+  // Project ACL from any Workspace shell, so an issue-backed item deep-links
+  // into the ACTIVE Workspace rather than emitting a link-less banner. The
+  // fallback is deliberately not used for the preference read above, which
+  // must stay scoped to the source Workspace.
+  const linkSlug = sourceSlug ?? (item.issue_id ? getCurrentSlug() : null);
   const payload: SystemNotificationPayload = {
-    slug: slug ?? "",
+    slug: linkSlug ?? "",
     itemId: item.id,
     issueKey: item.issue_id ?? item.id,
     title: item.title,
