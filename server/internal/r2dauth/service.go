@@ -5,6 +5,7 @@ package r2dauth
 import (
 	"context"
 	"errors"
+	"sort"
 )
 
 var ErrProjectNotFound = errors.New("project not found")
@@ -245,6 +246,48 @@ func Resolve(f ProjectFacts) Decision {
 	decision.Role = strongerProjectRole(decision.Role, f.DirectGrantRole)
 	decision.Role = strongerProjectRole(decision.Role, f.WorkspaceGrantRole)
 	return decision
+}
+
+// isExplicitProjectGrant reports whether a Project role came from an explicit
+// user or workspace grant rather than the owner Workspace's implicit role.
+func isExplicitProjectGrant(role ProjectRole) bool {
+	switch role {
+	case ProjectRoleViewer, ProjectRoleMember, ProjectRoleManager:
+		return true
+	default:
+		return false
+	}
+}
+
+// ProjectIDsForIssueCollection returns the readable Projects an issue
+// collection unions while activeWorkspaceID is the active Workspace: Projects
+// owned by that Workspace, foreign Projects the user was explicitly granted,
+// and the deployment-wide set a global observer may read. It mirrors the
+// Project list rule (r2dProjectCollectionIDs) so Projects and Issues cannot
+// drift. Callers pass facts from R2DListCandidateProjectAccessFacts; Resolve
+// stays the only policy engine.
+func ProjectIDsForIssueCollection(facts []ProjectFacts, activeWorkspaceID string) []string {
+	ids := make([]string, 0, len(facts))
+	seen := make(map[string]struct{}, len(facts))
+	for _, f := range facts {
+		if f.ProjectID == "" || !Resolve(f).Can(OperationRead) {
+			continue
+		}
+		include := f.OwnerWorkspaceID == activeWorkspaceID ||
+			f.GlobalObserver ||
+			isExplicitProjectGrant(f.DirectGrantRole) ||
+			isExplicitProjectGrant(f.WorkspaceGrantRole)
+		if !include {
+			continue
+		}
+		if _, ok := seen[f.ProjectID]; ok {
+			continue
+		}
+		seen[f.ProjectID] = struct{}{}
+		ids = append(ids, f.ProjectID)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func strongerProjectRole(a, b ProjectRole) ProjectRole {
