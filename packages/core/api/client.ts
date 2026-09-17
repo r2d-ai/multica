@@ -2490,12 +2490,12 @@ export class ApiClient {
     return this.fetch(`/api/inbox/${id}/unarchive`, { method: "POST" });
   }
 
-  // Raw unread ROW count — not the number any badge shows. The inbox renders
-  // one row per issue, so a single issue with three unread notifications
-  // counts once there and three times here. `getInboxUnreadSummary` is the
-  // deduplicated, per-workspace count the UI is built on (see
-  // `useInboxUnreadCount`); reach for this one only when raw rows are what
-  // you actually mean.
+  // Deduplicated unread count for the ACTIVE workspace: one row per issue,
+  // recipient-scoped, Project-ACL filtered. This is what the sidebar badge
+  // renders (`useInboxUnreadCount`), because it matches the rows the Inbox
+  // list shows while this workspace is active — including Project-grant rows
+  // from another Workspace. `getInboxUnreadSummary` remains the account-level
+  // per-workspace breakdown for the workspace-switcher dot.
   async getUnreadInboxCount(): Promise<{ count: number }> {
     return this.fetch("/api/inbox/unread-count");
   }

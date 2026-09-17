@@ -81,26 +81,33 @@ export function unreadCountForWorkspace(
 }
 
 /**
- * Unread inbox count for the given workspace — the number the sidebar nav
- * badge and the desktop dock badge render.
+ * Unread inbox count for one workspace — the number the sidebar nav badge and
+ * the desktop dock badge render.
  *
- * Read from the cross-workspace summary, NOT from the inbox list. The summary
- * is one small server-computed row per workspace and the sidebar already
- * fetches it for the workspace-switcher dot, so the badge costs no request of
- * its own; deriving it from `listInbox()` instead downloaded the entire
- * unbounded inbox on every app start just to render a number (MUL-6967).
+ * Workspace-scoped on purpose. The count must equal the rows the Inbox list
+ * shows for the ACTIVE workspace, and that list is recipient-scoped
+ * server-side: a Project-grant notification from another Workspace is shown
+ * while any of the recipient's workspaces is active. The account-level
+ * `unread-summary` cannot serve that — it attributes each row to the Workspace
+ * that owns the issue, so a collaborator who is not a member there reads 0
+ * forever (MUL-6967 follow-up). `GET /api/inbox/unread-count` is
+ * recipient-scoped and applies the same newest-per-issue dedup as the list.
  *
- * `GET /api/inbox/unread-count` is deliberately not the source: it counts raw
- * notification rows, while the inbox renders one row per issue. The summary
- * endpoint applies the same newest-per-issue rule `deduplicateInboxItems`
- * applies client-side, so this number matches the list the user sees.
+ * The query key sits under `inboxKeys.all(wsId)`, so `onInboxInvalidate`
+ * refreshes it with the list. `unread-summary` stays for the workspace-switcher
+ * dot, which needs the per-workspace breakdown.
  */
+export function inboxUnreadCountOptions(wsId: string) {
+  return queryOptions({
+    queryKey: [...inboxKeys.all(wsId), "unread-count"] as const,
+    queryFn: async () => (await api.getUnreadInboxCount()).count,
+  });
+}
+
 export function useInboxUnreadCount(wsId: string | null | undefined): number {
   const { data } = useQuery({
-    ...inboxUnreadSummaryOptions(),
+    ...inboxUnreadCountOptions(wsId ?? ""),
     enabled: !!wsId,
-    select: (summary: InboxWorkspaceUnread[]) =>
-      unreadCountForWorkspace(summary, wsId),
   });
   return data ?? 0;
 }

@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
 import { createQueryClient } from "../query-client";
-import type { InboxItem, InboxWorkspaceUnread } from "../types";
+import type { InboxItem } from "../types";
 import { useMarkInboxRead } from "./mutations";
 import {
   deduplicateInboxItems,
@@ -110,11 +110,6 @@ class FakeServer {
   unread(): number {
     return deduplicateInboxItems(this.list()).filter((r) => !r.read).length;
   }
-
-  summary(): InboxWorkspaceUnread[] {
-    const count = this.unread();
-    return count > 0 ? [{ workspace_id: WS, count }] : [];
-  }
 }
 
 async function tick() {
@@ -148,7 +143,7 @@ it.each(Array.from({ length: SEEDS }, (_, i) => i + 1))(
 
     setApiInstance({
       listInbox: vi.fn(() => deferred(() => server.list())),
-      getInboxUnreadSummary: vi.fn(() => deferred(() => server.summary())),
+      getUnreadInboxCount: vi.fn(() => deferred(() => ({ count: server.unread() }))),
       markInboxRead: vi.fn((id: string) => {
         // Commit, then publish: the event exists before the response does.
         server.markRead(id);
@@ -163,7 +158,7 @@ it.each(Array.from({ length: SEEDS }, (_, i) => i + 1))(
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={qc}>{children}</QueryClientProvider>
     );
-    // The sidebar: always mounted, reads only the summary.
+    // The sidebar: always mounted, reads only the workspace-scoped count.
     const shell = renderHook(
       () => ({
         badge: useInboxUnreadCount(WS),

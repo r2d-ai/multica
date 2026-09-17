@@ -262,18 +262,29 @@ WHERE i.id = $1::uuid
 }
 
 // R2DListUnreadInboxRowsForRecipient returns the (workspace, project) pair of
-// every unread, non-archived inbox row for one recipient, across workspaces.
-// The caller filters by current Project ACL and counts; the payload stays tiny
-// so a count endpoint never loads notification bodies.
+// every VISIBLE unread inbox row for one recipient, across workspaces, after
+// the same newest-per-issue dedup the Inbox list applies. The dedup key and
+// ordering mirror R2DListUnreadInboxSummaryRows so the sidebar badge and the
+// list cannot disagree; grouping before the caller's Project ACL filter is safe
+// because every row in a group shares one Project. The caller filters by
+// current Project ACL and counts; the payload stays tiny so a count endpoint
+// never loads notification bodies.
 func (q *Queries) R2DListUnreadInboxRowsForRecipient(ctx context.Context, recipientID string) ([]R2DInboxUnreadRow, error) {
 	rows, err := q.db.Query(ctx, `
-SELECT i.workspace_id::text, COALESCE(iss.project_id::text, '')
-FROM inbox_item i
-LEFT JOIN issue iss ON iss.id = i.issue_id
-WHERE i.recipient_type = 'member'
-  AND i.recipient_id = $1::uuid
-  AND i.read = false
-  AND i.archived = false`, recipientID)
+SELECT newest.workspace_id::text, newest.project_id
+FROM (
+    SELECT DISTINCT ON (i.workspace_id, COALESCE(i.issue_id, i.id))
+        i.workspace_id,
+        COALESCE(iss.project_id::text, '') AS project_id,
+        i.read
+    FROM inbox_item i
+    LEFT JOIN issue iss ON iss.id = i.issue_id
+    WHERE i.recipient_type = 'member'
+      AND i.recipient_id = $1::uuid
+      AND i.archived = false
+    ORDER BY i.workspace_id, COALESCE(i.issue_id, i.id), i.created_at DESC, i.id DESC
+) newest
+WHERE newest.read = false`, recipientID)
 	if err != nil {
 		return nil, err
 	}
