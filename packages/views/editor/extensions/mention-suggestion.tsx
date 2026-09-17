@@ -16,6 +16,8 @@ import { flattenIssueBuckets, issueKeys } from "@multica/core/issues/queries";
 import { issueStatusCategory } from "@multica/core/issues";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { workspaceKeys } from "@multica/core/workspace/queries";
+import { r2dAssignableActorKeys } from "@multica/core/projects/r2d-assignable-actors";
+import type { R2DProjectPrincipal } from "@multica/core/projects/r2d-sharing";
 import { useAuthStore } from "@multica/core/auth";
 import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { isAgentRuntimeBound } from "@multica/core/agents";
@@ -704,6 +706,46 @@ function matchesMentionQuery(item: MentionItem, query: string): boolean {
 interface MentionSuggestionOptions {
   mode?: "default" | "context";
   getContextItems?: () => MentionItem[];
+  /**
+   * The Project the editor is writing into, when the surface knows it (an
+   * Issue's `project_id`). Member suggestions then come from the Project's
+   * assignable roster, which is the only source that names a collaborator whose
+   * home Workspace is not the Project owner's. Omit it in an editor with no
+   * Project context (chat): the active Workspace's member list stays the source.
+   */
+  mentionProjectId?: string | null;
+}
+
+/**
+ * Member rows for the mention list. Reads the Project roster when a Project is
+ * in context, otherwise the active Workspace's member cache. Exported so the
+ * source selection is testable without driving the tiptap suggestion UI.
+ */
+export function mentionMemberItems(
+  qc: QueryClient,
+  projectId: string | null | undefined,
+  query: string,
+): MentionItem[] {
+  const roster: R2DProjectPrincipal[] = projectId
+    ? (qc.getQueryData(r2dAssignableActorKeys.members(projectId)) ?? [])
+    : [];
+  const candidates = projectId
+    ? roster.map((principal) => ({ id: principal.id, label: principal.name }))
+    : (() => {
+        const wsId = getCurrentWsId();
+        if (!wsId) return [];
+        const members: MemberWithUser[] =
+          qc.getQueryData(workspaceKeys.members(wsId)) ?? [];
+        return members.map((member) => ({
+          id: member.user_id,
+          label: member.name,
+        }));
+      })();
+
+  const q = query.toLowerCase();
+  return candidates
+    .filter((c) => c.label.toLowerCase().includes(q) || matchesPinyin(c.label, q))
+    .map((c) => ({ id: c.id, label: c.label, type: "member" as const }));
 }
 
 export function createMentionSuggestion(
@@ -747,13 +789,11 @@ export function createMentionSuggestion(
         ? [{ id: "all", label: "All members", type: "all" as const }]
         : [];
 
-    const memberItems: MentionItem[] = members
-      .filter((m) => m.name.toLowerCase().includes(q) || matchesPinyin(m.name, q))
-      .map((m) => ({
-        id: m.user_id,
-        label: m.name,
-        type: "member" as const,
-      }));
+    const memberItems: MentionItem[] = mentionMemberItems(
+      qc,
+      options.mentionProjectId,
+      query,
+    );
 
     const agentItems: MentionItem[] = agents
       .filter(
