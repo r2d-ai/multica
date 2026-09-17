@@ -10,7 +10,12 @@ import {
   type ReactNode,
 } from "react";
 import { WSClient } from "../api/ws-client";
-import type { WSEventType, StorageAdapter } from "../types";
+import type {
+  WSEventType,
+  WSSubscriptionScope,
+  WSSubscriptionResult,
+  StorageAdapter,
+} from "../types";
 import type { ClientIdentity } from "../platform/types";
 import type { StoreApi, UseBoundStore } from "zustand";
 import type { AuthState } from "../auth/store";
@@ -26,6 +31,13 @@ type EventHandler = (payload: unknown, actorId?: string, actorType?: string) => 
 interface WSContextValue {
   subscribe: (event: WSEventType, handler: EventHandler) => () => void;
   onReconnect: (callback: () => void) => () => void;
+  /** Join a resource-backed scope (task / chat / project). Ref-counted and
+   *  replayed on reconnect; returns a release function. */
+  subscribeScope: (scope: WSSubscriptionScope, id: string) => () => void;
+  /** Observe `subscribe_ack` / `subscribe_error` outcomes. */
+  onSubscriptionResult: (
+    handler: (result: WSSubscriptionResult) => void,
+  ) => () => void;
 }
 
 const WSContext = createContext<WSContextValue | null>(null);
@@ -136,8 +148,26 @@ export function WSProvider({
     [wsClient],
   );
 
+  const subscribeScope = useCallback(
+    (scope: WSSubscriptionScope, id: string) => {
+      if (!wsClient) return () => {};
+      return wsClient.subscribeScope(scope, id);
+    },
+    [wsClient],
+  );
+
+  const onSubscriptionResult = useCallback(
+    (handler: (result: WSSubscriptionResult) => void) => {
+      if (!wsClient) return () => {};
+      return wsClient.onSubscriptionResult(handler);
+    },
+    [wsClient],
+  );
+
   return (
-    <WSContext.Provider value={{ subscribe, onReconnect: onReconnectCb }}>
+    <WSContext.Provider
+      value={{ subscribe, onReconnect: onReconnectCb, subscribeScope, onSubscriptionResult }}
+    >
       {children}
     </WSContext.Provider>
   );

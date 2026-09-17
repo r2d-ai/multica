@@ -99,6 +99,35 @@ export interface WSMessage<T = unknown> {
   actor_type?: string;
 }
 
+/**
+ * Scope types a client may explicitly join over the WS protocol. Mirrors the
+ * server's `realtime.Scope*` constants for the scopes web/desktop clients use.
+ * `workspace` and `user` are auto-joined by the server at connect time;
+ * `task`, `chat`, and `project` require an explicit `subscribe` frame and are
+ * gated server-side by the `ScopeAuthorizer` (Project is fail-closed).
+ */
+export type WSSubscriptionScope =
+  | "workspace"
+  | "user"
+  | "task"
+  | "chat"
+  | "project";
+
+/**
+ * Outcome of an explicit `subscribe` frame, surfaced from the server's
+ * `subscribe_ack` / `subscribe_error` control frames. These are transport
+ * control frames, not business events, so they never enter `WSEventType`.
+ */
+export interface WSSubscriptionResult {
+  scope: string;
+  id: string;
+  /** true for `subscribe_ack`, false for `subscribe_error`. */
+  ok: boolean;
+  /** Denial reason (`forbidden`, `lookup_failed`, `unknown_scope`,
+   *  `invalid payload`) — present only when `ok` is false. */
+  error?: string;
+}
+
 export interface IssueCreatedPayload {
   issue: Issue;
 }

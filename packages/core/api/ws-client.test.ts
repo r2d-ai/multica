@@ -8,18 +8,25 @@ import type { WSMessage } from "../types/events";
 class FakeWebSocket {
   static lastUrl: string | null = null;
   static lastInstance: FakeWebSocket | null = null;
+  // Present so WSClient's `readyState === WebSocket.OPEN` guard can pass for
+  // tests that exercise outbound frames (subscribe / unsubscribe).
+  static readonly OPEN = 1;
   // Fields read by WSClient.connect()/disconnect(), all no-op here.
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
-  readyState = 0;
+  readyState = FakeWebSocket.OPEN;
+  /** Every frame the client sent, in order. */
+  sent: string[] = [];
   constructor(url: string) {
     FakeWebSocket.lastUrl = url;
     FakeWebSocket.lastInstance = this;
   }
   close() {}
-  send() {}
+  send(data: string) {
+    this.sent.push(data);
+  }
 }
 
 describe("WSClient", () => {
@@ -203,6 +210,198 @@ describe("WSClient", () => {
       "user-123",
       "user",
     );
+  });
+
+  // ── Explicit scope subscriptions (task / chat / project) ────────────
+  //
+  // A Project collaborator whose home Workspace is not the Project owner's
+  // never receives the owner Workspace fanout; they only receive Project-scoped
+  // frames after this client joins the `project:{id}` room. These tests pin the
+  // client half of that contract: connect → subscribe → event → reconnect →
+  // re-subscribe, plus the denial and ref-count paths.
+  describe("scope subscriptions", () => {
+    function lastSocket(): FakeWebSocket {
+      return FakeWebSocket.lastInstance!;
+    }
+
+    /** Simulate the server's auth handshake completing. */
+    function authenticate() {
+      lastSocket().onmessage?.({
+        data: JSON.stringify({ type: "auth_ack" }),
+      });
+    }
+
+    function sentFrames(): Array<{ type: string; payload?: any }> {
+      return lastSocket().sent.map((raw) => JSON.parse(raw));
+    }
+
+    function frameTypes(): string[] {
+      return sentFrames().map((frame) => frame.type);
+    }
+
+    function deliver(frame: Record<string, unknown>) {
+      lastSocket().onmessage?.({ data: JSON.stringify(frame) });
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("withholds the subscribe frame until the connection is authenticated", () => {
+      const ws = new WSClient("ws://example.test/ws");
+      ws.setAuth("tok", "acme");
+      ws.connect();
+
+      // Subscribe before the auth exchange completes: the frame is queued in
+      // the desired set, not sent on an unauthenticated socket.
+      const release = ws.subscribeScope("project", "p-1");
+      expect(frameTypes()).toEqual([]);
+
+      lastSocket().onopen?.();
+      expect(frameTypes()).toEqual(["auth"]);
+
+      authenticate();
+      expect(frameTypes()).toEqual(["auth", "subscribe"]);
+      expect(sentFrames()[1]?.payload).toEqual({ scope: "project", id: "p-1" });
+
+      release();
+      // Last reference released -> unsubscribe, not another subscribe.
+      expect(frameTypes()).toEqual(["auth", "subscribe", "unsubscribe"]);
+    });
+
+    it("replays desired subscriptions after a reconnect and accepts a fresh ack", () => {
+      const ws = new WSClient("ws://example.test/ws");
+      ws.setAuth("tok", "acme");
+      ws.connect();
+      lastSocket().onopen?.();
+      authenticate();
+
+      ws.subscribeScope("project", "p-1");
+      expect(sentFrames().filter((f) => f.type === "subscribe")).toHaveLength(1);
+
+      // Drop the socket; the auto-reconnect builds a brand new one — which has
+      // none of the previous rooms, so the client must re-join.
+      lastSocket().onclose?.();
+      vi.runOnlyPendingTimers();
+      expect(FakeWebSocket.lastInstance).not.toBeUndefined();
+
+      const fresh = lastSocket();
+      expect(fresh.sent).toEqual([]);
+      fresh.onopen?.();
+      authenticate();
+
+      const replayed = sentFrames().filter((f) => f.type === "subscribe");
+      expect(replayed).toHaveLength(1);
+      expect(replayed[0]?.payload).toEqual({ scope: "project", id: "p-1" });
+
+      // A fresh ack/error can arrive for the replayed frame.
+      const results = vi.fn();
+      ws.onSubscriptionResult(results);
+      deliver({
+        type: "subscribe_ack",
+        payload: { scope: "project", id: "p-1" },
+      });
+      expect(results).toHaveBeenCalledWith({
+        scope: "project",
+        id: "p-1",
+        ok: true,
+      });
+    });
+
+    it("ref-counts duplicate subscriptions and unsubscribes on the last release", () => {
+      const ws = new WSClient("ws://example.test/ws");
+      ws.setAuth("tok", "acme");
+      ws.connect();
+      lastSocket().onopen?.();
+      authenticate();
+
+      const releaseFirst = ws.subscribeScope("project", "p-1");
+      const releaseSecond = ws.subscribeScope("project", "p-1");
+      expect(sentFrames().filter((f) => f.type === "subscribe")).toHaveLength(1);
+
+      releaseFirst();
+      expect(sentFrames().filter((f) => f.type === "unsubscribe")).toHaveLength(0);
+
+      releaseSecond();
+      const unsubscribes = sentFrames().filter((f) => f.type === "unsubscribe");
+      expect(unsubscribes).toHaveLength(1);
+      expect(unsubscribes[0]?.payload).toEqual({ scope: "project", id: "p-1" });
+    });
+
+    it("surfaces subscribe_error without dispatching it as a business event", () => {
+      const ws = new WSClient("ws://example.test/ws");
+      ws.setAuth("tok", "acme");
+      ws.connect();
+      lastSocket().onopen?.();
+      authenticate();
+
+      const results = vi.fn();
+      const anyHandler = vi.fn();
+      ws.onSubscriptionResult(results);
+      ws.onAny(anyHandler);
+      ws.subscribeScope("project", "p-1");
+
+      deliver({
+        type: "subscribe_error",
+        payload: { scope: "project", id: "p-1", error: "forbidden" },
+      });
+
+      expect(results).toHaveBeenCalledWith({
+        scope: "project",
+        id: "p-1",
+        ok: false,
+        error: "forbidden",
+      });
+      // Control frames must not leak into the onAny / prefix invalidation path.
+      expect(anyHandler).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "subscribe_error" }),
+      );
+    });
+
+    it("delivers project events after subscribe and keeps delivering after reconnect", () => {
+      const ws = new WSClient("ws://example.test/ws");
+      ws.setAuth("tok", "acme");
+      const issueHandler = vi.fn();
+      ws.on("issue:updated", issueHandler);
+      ws.connect();
+      lastSocket().onopen?.();
+      authenticate();
+
+      ws.subscribeScope("project", "p-1");
+      deliver({
+        type: "subscribe_ack",
+        payload: { scope: "project", id: "p-1" },
+      });
+      deliver({
+        type: "issue:updated",
+        payload: { issue: { id: "i-1" } },
+      });
+      expect(issueHandler).toHaveBeenCalledTimes(1);
+      expect(issueHandler).toHaveBeenCalledWith(
+        { issue: { id: "i-1" } },
+        undefined,
+        undefined,
+      );
+
+      // Reconnect: the room is rejoined and events resume on the new socket.
+      lastSocket().onclose?.();
+      vi.runOnlyPendingTimers();
+      lastSocket().onopen?.();
+      authenticate();
+      expect(
+        sentFrames().filter((f) => f.type === "subscribe"),
+      ).toHaveLength(1);
+
+      deliver({
+        type: "issue:updated",
+        payload: { issue: { id: "i-2" } },
+      });
+      expect(issueHandler).toHaveBeenCalledTimes(2);
+    });
   });
 
   // ── Reconnect backoff tests ────────────────────────────────────────
