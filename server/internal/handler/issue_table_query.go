@@ -440,7 +440,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return issueTableSQL{}, false
 	}
-	readableProjectIDs, err := h.r2dReadableWorkspaceProjectIDs(
+	readableProjectIDs, err := h.r2dReadableIssueProjectIDs(
 		r.Context(), userID, util.UUIDToString(workspaceUUID),
 	)
 	if err != nil {
@@ -448,10 +448,10 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		return issueTableSQL{}, false
 	}
 
-	// Projectless Issues remain Workspace-scoped. Project-backed Issues share
-	// the exact readable-Project set resolved by r2dauth, so every row/group/
-	// facet/count query built from this predicate has identical ACL semantics.
-	where := []string{"i.workspace_id = $1 AND (i.project_id IS NULL OR i.project_id = ANY($2::uuid[]))"}
+	// Projectless Issues remain Workspace-scoped. Project-backed Issues follow
+	// the readable-Project set, which may include Projects owned by another
+	// Workspace when this user holds an explicit grant.
+	where := []string{"((i.workspace_id = $1 AND i.project_id IS NULL) OR i.project_id = ANY($2::uuid[]))"}
 	args := []any{workspaceUUID, readableProjectIDs}
 	addArg := func(value any) string {
 		args = append(args, value)
