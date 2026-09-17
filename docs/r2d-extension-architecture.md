@@ -265,3 +265,12 @@ A custom feature is not ready if any answer below is wrong:
 - Are upstream integration edits minimal?
 - Can this patch be replayed independently after the next upstream sync?
 - Is tracker #12 updated when the migration/backport cursor changes?
+
+## Issue collection visibility
+
+Workspace-scoped issue reads union the Projects an issue collection may show:
+Projects owned by the active Workspace, foreign Projects the user holds an
+explicit user/workspace grant on, and a global observer's readable set. The rule
+is `r2dauth.ProjectIDsForIssueCollection` and is shared with the Project list so
+Projects and Issues cannot drift. Projectless issues stay Workspace-private, and
+write/batch paths keep the Workspace-owned readable set.

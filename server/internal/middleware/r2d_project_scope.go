@@ -234,45 +234,19 @@ func tryR2DProjectScope(queries *db.Queries, w http.ResponseWriter, r *http.Requ
 	return false
 }
 
-func r2dExplicitProjectGrant(role string) bool {
-	switch r2dauth.ProjectRole(role) {
-	case r2dauth.ProjectRoleViewer, r2dauth.ProjectRoleMember, r2dauth.ProjectRoleManager:
-		return true
-	default:
-		return false
-	}
-}
-
 // r2dProjectCollectionIDs builds the Project set shown while one Workspace is
-// active. Membership in another Workspace by itself is NOT collaboration: a
-// foreign Project is injected only through an explicit user/workspace grant.
-// global_observer is the exception by design and receives deployment-wide read.
+// active. It shares r2dauth.ProjectIDsForIssueCollection with the issue
+// collections so Projects and Issues cannot drift.
 func r2dProjectCollectionIDs(ctx context.Context, queries *db.Queries, userID, activeWorkspaceID string) ([]string, error) {
 	facts, err := queries.R2DListCandidateProjectAccessFacts(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-
-	ids := make([]string, 0, len(facts))
-	seen := make(map[string]struct{}, len(facts))
+	policyFacts := make([]r2dauth.ProjectFacts, 0, len(facts))
 	for _, fact := range facts {
-		if fact.ProjectID == "" || !r2dauth.Resolve(r2dFacts(fact)).Can(r2dauth.OperationRead) {
-			continue
-		}
-		include := fact.OwnerWorkspaceID == activeWorkspaceID || fact.GlobalObserver
-		if !include && (r2dExplicitProjectGrant(fact.DirectGrantRole) || r2dExplicitProjectGrant(fact.WorkspaceGrantRole)) {
-			include = true
-		}
-		if !include {
-			continue
-		}
-		if _, ok := seen[fact.ProjectID]; ok {
-			continue
-		}
-		seen[fact.ProjectID] = struct{}{}
-		ids = append(ids, fact.ProjectID)
+		policyFacts = append(policyFacts, r2dFacts(fact))
 	}
-	return ids, nil
+	return r2dauth.ProjectIDsForIssueCollection(policyFacts, activeWorkspaceID), nil
 }
 
 func writeR2DJSON(w http.ResponseWriter, status int, payload any) error {

@@ -49,20 +49,6 @@ func TestR2DIssueOperation(t *testing.T) {
 	}
 }
 
-func TestR2DExplicitProjectGrant(t *testing.T) {
-	t.Parallel()
-	for _, role := range []string{"viewer", "member", "manager"} {
-		if !r2dExplicitProjectGrant(role) {
-			t.Errorf("valid explicit project role %q rejected", role)
-		}
-	}
-	for _, role := range []string{"", "owner", "admin", "global_observer"} {
-		if r2dExplicitProjectGrant(role) {
-			t.Errorf("non-project grant role %q accepted", role)
-		}
-	}
-}
-
 func TestR2DRawProjectRows(t *testing.T) {
 	t.Parallel()
 	rows, err := r2dRawProjectRows([]string{

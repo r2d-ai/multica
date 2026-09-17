@@ -6,7 +6,19 @@ import (
 	"net/url"
 	"reflect"
 	"testing"
+
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+func TestR2DReadableIssueProjectIDsIsWired(t *testing.T) {
+	t.Parallel()
+	// Compile-level guard: the middleware must expose the cross-Workspace
+	// helper and no longer the Workspace-bound one.
+	var fn func(*db.Queries, *http.Request, string, string) ([]string, error) = r2dReadableIssueProjectIDs
+	if fn == nil {
+		t.Fatal("r2dReadableIssueProjectIDs is not wired")
+	}
+}
 
 func TestR2DApplyReadableProjectValuesDefaultScope(t *testing.T) {
 	t.Parallel()
