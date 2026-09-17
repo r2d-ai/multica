@@ -240,10 +240,11 @@ func TestP07AIntegrationCommentRoute(t *testing.T) {
 	// No grant: the shared project's comments are a non-disclosing 404.
 	p07aITWantStatus(t, p07aITRequest(t, p07aITToken(t, ungranted), http.MethodGet, commentsPath, f.ownerWorkspace, nil), http.StatusNotFound)
 
-	// Comment-by-id mutation is still Workspace-member scoped, so a foreign
-	// collaborator cannot reach it — fail closed, not a bypass.
+	// Comment-by-id mutation is now Project-ACL aware: a foreign contributor
+	// reaches the handler and fails authorship (403), while a read-only viewer
+	// is denied by the middleware with the non-disclosing 404.
 	commentID := p07aITComment(t, f.ownerWorkspace, f.issueID)
-	p07aITWantStatus(t, p07aITRequest(t, p07aITToken(t, member), http.MethodDelete, "/api/comments/"+commentID, f.ownerWorkspace, nil), http.StatusNotFound)
+	p07aITWantStatus(t, p07aITRequest(t, p07aITToken(t, member), http.MethodDelete, "/api/comments/"+commentID, f.ownerWorkspace, nil), http.StatusForbidden)
 	p07aITWantStatus(t, p07aITRequest(t, p07aITToken(t, viewer), http.MethodDelete, "/api/comments/"+commentID, f.ownerWorkspace, nil), http.StatusNotFound)
 
 	// Projectless issue: a Project grant does not widen the Workspace boundary.
