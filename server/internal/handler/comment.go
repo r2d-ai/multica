@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -3305,17 +3306,27 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
-		return
-	}
-
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	isAuthor := existing.AuthorType == actorType && uuidToString(existing.AuthorID) == actorID
-	isAdmin := roleAllowed(member.Role, "owner", "admin")
-	if !isAuthor && !isAdmin {
-		writeError(w, http.StatusForbidden, "only comment author or admin can edit")
-		return
+
+	// When authorized through the Project ACL (foreign collaborator on a
+	// Project-backed Issue), only the comment author may edit. A Project
+	// grant never grants moderation authority over other users' comments.
+	if middleware.R2DProjectACLFromContext(r.Context()) {
+		if !isAuthor {
+			writeError(w, http.StatusForbidden, "only comment author can edit")
+			return
+		}
+	} else {
+		member, ok := h.workspaceMember(w, r, workspaceID)
+		if !ok {
+			return
+		}
+		isAdmin := roleAllowed(member.Role, "owner", "admin")
+		if !isAuthor && !isAdmin {
+			writeError(w, http.StatusForbidden, "only comment author or admin can edit")
+			return
+		}
 	}
 
 	var req struct {
@@ -3571,17 +3582,27 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
-		return
-	}
-
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	isAuthor := comment.AuthorType == actorType && uuidToString(comment.AuthorID) == actorID
-	isAdmin := roleAllowed(member.Role, "owner", "admin")
-	if !isAuthor && !isAdmin {
-		writeError(w, http.StatusForbidden, "only comment author or admin can delete")
-		return
+
+	// When authorized through the Project ACL (foreign collaborator on a
+	// Project-backed Issue), only the comment author may delete. A Project
+	// grant never grants moderation authority over other users' comments.
+	if middleware.R2DProjectACLFromContext(r.Context()) {
+		if !isAuthor {
+			writeError(w, http.StatusForbidden, "only comment author can delete")
+			return
+		}
+	} else {
+		member, ok := h.workspaceMember(w, r, workspaceID)
+		if !ok {
+			return
+		}
+		isAdmin := roleAllowed(member.Role, "owner", "admin")
+		if !isAuthor && !isAdmin {
+			writeError(w, http.StatusForbidden, "only comment author or admin can delete")
+			return
+		}
 	}
 	issue, err := h.Queries.GetIssue(r.Context(), comment.IssueID)
 	hasIssue := err == nil

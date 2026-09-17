@@ -16,6 +16,7 @@ type contextKey int
 const (
 	ctxKeyWorkspaceID contextKey = iota
 	ctxKeyMember
+	ctxKeyR2DProjectACL
 )
 
 // MemberFromContext returns the workspace member injected by the workspace middleware.
@@ -37,6 +38,22 @@ func SetMemberContext(ctx context.Context, workspaceID string, member db.Member)
 	ctx = context.WithValue(ctx, ctxKeyWorkspaceID, workspaceID)
 	ctx = context.WithValue(ctx, ctxKeyMember, member)
 	return ctx
+}
+
+// R2DProjectACLFromContext reports whether the request was authorized through
+// the R2D Project ACL path rather than ordinary Workspace membership. When
+// true the handler may skip the workspace-member requirement but must still
+// enforce authorship — a Project grant never grants moderation authority.
+func R2DProjectACLFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(ctxKeyR2DProjectACL).(bool)
+	return v
+}
+
+// SetR2DProjectACL marks the context as having been authorized through the
+// Project ACL path. The workspace middleware skips the workspace-membership
+// requirement when this flag is set.
+func SetR2DProjectACL(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyR2DProjectACL, true)
 }
 
 // errWorkspaceNotFound is returned when a slug was provided but doesn't match
@@ -254,6 +271,12 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 				if tryR2DAttachmentScope(queries, w, r, next, userID) {
 					return
 				}
+				// Comment PUT/DELETE by-id is also Workspace-scoped upstream; a
+				// foreign Project collaborator needs the Project ACL to mutate
+				// their own comments on shared Issues.
+				if tryR2DCommentScope(queries, w, r, next, userID) {
+					return
+				}
 			}
 
 			wsUUID, err := util.ParseUUID(workspaceID)
@@ -261,6 +284,20 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 				writeError(w, http.StatusBadRequest, "invalid workspace_id")
 				return
 			}
+
+			// When the request was authorized through the Project ACL path
+			// (e.g. comment PUT/DELETE on a Project-backed Issue), the caller
+			// may not be a member of the owner Workspace. Skip the membership
+			// check and proceed with the workspace ID already set by the
+			// Project-ACL middleware. The handler is responsible for enforcing
+			// the appropriate authorization (author-only for comments).
+			if R2DProjectACLFromContext(r.Context()) {
+				ctx := SetWorkspaceIDContext(r.Context(), workspaceID)
+				scoped := r.WithContext(ctx)
+				next.ServeHTTP(w, scoped)
+				return
+			}
+
 			member, err := queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
 				UserID:      userUUID,
 				WorkspaceID: wsUUID,
