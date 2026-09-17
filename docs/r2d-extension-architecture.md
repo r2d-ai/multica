@@ -266,6 +266,24 @@ A custom feature is not ready if any answer below is wrong:
 - Can this patch be replayed independently after the next upstream sync?
 - Is tracker #12 updated when the migration/backport cursor changes?
 
+## Cross-workspace assignment
+
+A Project grant makes its holder assignable on that Project. `assignee_type`
+stays `member`; `assignee_id` is a user id that may belong to a Workspace other
+than the Project owner's. Assignable users are owner-Workspace members, direct
+grantees, and members of granted Workspaces (`GET
+/api/projects/{id}/assignable-actors`). Owner-Workspace Agents and Squads stay
+unassignable for foreign collaborators. Issue payloads carry `assignee_name`
+and `assignee_avatar_url` when the caller may enumerate the assignee, so a
+cross-Workspace assignee never renders as `Unknown`.
+
+The read path is ACL-native: `r2dauth` remains the sole role resolver, and the
+assignee write gate (`r2dAssigneeFieldDecision` plus `R2DIsAssignableMember`)
+replaces the former "must be a Workspace member" rule. Projectless Issues keep
+the Workspace boundary. Project-grant notification reads stay grant-aware
+through `r2dInboxVisibleFor`, which re-checks the current Project ACL on every
+read and mutation.
+
 ## Issue collection visibility
 
 Workspace-scoped issue reads union the Projects an issue collection may show:

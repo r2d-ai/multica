@@ -164,6 +164,53 @@ func r2dForeignProjectRestrictedFields(fields map[string]json.RawMessage) bool {
 	return false
 }
 
+// r2dAssigneeFieldDecision reports whether a non-member may submit these
+// fields. A member-type assignee is allowed only when the target user is
+// assignable on the Project; Agent/Squad inventory and attachment/label/origin
+// fields stay Workspace-member-only. The second return value reports whether
+// the caller must be answered 403.
+func r2dAssigneeFieldDecision(fields map[string]json.RawMessage, assignable bool) (bool, bool) {
+	rawType, hasType := fields["assignee_type"]
+	rawID, hasID := fields["assignee_id"]
+	typeNull := !hasType || r2dRawNull(rawType)
+	idNull := !hasID || r2dRawNull(rawID)
+	if !(typeNull && idNull) {
+		var assigneeType string
+		if hasType && !r2dRawNull(rawType) {
+			if err := json.Unmarshal(rawType, &assigneeType); err != nil {
+				return false, true
+			}
+		}
+		if assigneeType != "member" || !assignable {
+			return false, true
+		}
+	}
+	for _, key := range []string{"attachment_ids", "label_ids", "origin_type", "origin_id"} {
+		if raw, ok := fields[key]; ok && !r2dRawNull(raw) {
+			return false, true
+		}
+	}
+	return true, false
+}
+
+// r2dAssigneeAssignableFor resolves whether the submitted assignee_id is
+// assignable on projectID. A missing, cleared, malformed, or non-member
+// assignee resolves to false so the caller's decision helper rejects it.
+func r2dAssigneeAssignableFor(queries *db.Queries, r *http.Request, projectID string, fields map[string]json.RawMessage) (bool, error) {
+	if projectID == "" {
+		return false, nil
+	}
+	rawAssignee, ok := fields["assignee_id"]
+	if !ok || r2dRawNull(rawAssignee) {
+		return false, nil
+	}
+	assigneeID, err := r2dRawUUID(rawAssignee)
+	if err != nil || assigneeID == "" {
+		return false, nil
+	}
+	return queries.R2DIsAssignableMember(r.Context(), projectID, assigneeID)
+}
+
 func r2dHandleIssueCreateScope(queries *db.Queries, w http.ResponseWriter, r *http.Request, next http.Handler, userID string) bool {
 	fields, err := r2dReadJSONFields(r)
 	if err != nil {
@@ -188,11 +235,20 @@ func r2dHandleIssueCreateScope(queries *db.Queries, w http.ResponseWriter, r *ht
 		writeError(w, http.StatusInternalServerError, "failed to authorize workspace")
 		return true
 	}
-	if !isMember && r2dForeignProjectRestrictedFields(fields) {
+	if !isMember {
 		// A Project grant never grants Workspace-owned Agent/Squad/label/file
-		// inventory, nor trusted task/origin provenance.
-		writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
-		return true
+		// inventory, nor trusted task/origin provenance. A member-type assignee
+		// is allowed when the target user is assignable on this Project — which
+		// includes another Workspace's grant holders.
+		assignable, assignErr := r2dAssigneeAssignableFor(queries, r, projectID, fields)
+		if assignErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to authorize assignee")
+			return true
+		}
+		if _, forbidden := r2dAssigneeFieldDecision(fields, assignable); forbidden {
+			writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
+			return true
+		}
 	}
 	if rawParent, ok := fields["parent_issue_id"]; ok && !r2dRawNull(rawParent) {
 		parentID, err := r2dRawUUID(rawParent)
@@ -318,11 +374,14 @@ func r2dHandleDirectIssueMutation(queries *db.Queries, w http.ResponseWriter, r 
 	}
 
 	if !isMember {
-		for _, key := range []string{"assignee_type", "assignee_id", "attachment_ids"} {
-			if _, touched := fields[key]; touched {
-				writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
-				return true
-			}
+		assignable, assignErr := r2dAssigneeAssignableFor(queries, r, target.ProjectID, fields)
+		if assignErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to authorize assignee")
+			return true
+		}
+		if _, forbidden := r2dAssigneeFieldDecision(fields, assignable); forbidden {
+			writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
+			return true
 		}
 	}
 
@@ -504,15 +563,6 @@ func r2dHandleIssueBatchScope(queries *db.Queries, w http.ResponseWriter, r *htt
 		if ok && !r2dRawNull(rawUpdates) {
 			var updates map[string]json.RawMessage
 			if json.Unmarshal(rawUpdates, &updates) == nil {
-				if !isMember {
-					for _, key := range []string{"assignee_type", "assignee_id"} {
-						if _, touched := updates[key]; touched {
-							writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
-							return true
-						}
-					}
-				}
-
 				effectiveProjectID := ""
 				if len(projectIDs) == 1 {
 					effectiveProjectID = projectIDs[0]
@@ -539,6 +589,20 @@ func r2dHandleIssueBatchScope(queries *db.Queries, w http.ResponseWriter, r *htt
 							return true
 						}
 						effectiveProjectID = destinationProjectID
+					}
+				}
+				if !isMember {
+					// A member-type assignee is allowed when the target user is
+					// assignable on the (single) destination Project; a
+					// multi-Project batch keeps the Workspace boundary.
+					assignable, assignErr := r2dAssigneeAssignableFor(queries, r, effectiveProjectID, updates)
+					if assignErr != nil {
+						writeError(w, http.StatusInternalServerError, "failed to authorize assignee")
+						return true
+					}
+					if _, forbidden := r2dAssigneeFieldDecision(updates, assignable); forbidden {
+						writeError(w, http.StatusForbidden, "project access does not grant workspace resource access")
+						return true
 					}
 				}
 				if rawParent, touched := updates["parent_issue_id"]; touched && !r2dRawNull(rawParent) {

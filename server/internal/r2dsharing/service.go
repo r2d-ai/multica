@@ -62,6 +62,7 @@ type Store interface {
 	UpdateGrantRole(ctx context.Context, projectID, grantID, role string) (Grant, error)
 	DeleteGrant(ctx context.Context, projectID, grantID string) (bool, error)
 	SearchPrincipals(ctx context.Context, principalType PrincipalType, query string, limit int) ([]Principal, error)
+	ListAssignableMembers(ctx context.Context, projectID string) ([]Principal, error)
 }
 
 type Service struct {
@@ -102,7 +103,7 @@ func (s *Service) SetVisibility(ctx context.Context, userID, projectID string, v
 }
 
 func (s *Service) CreateGrant(ctx context.Context, userID, projectID, grantID string, principalType PrincipalType, principalID, role string) (Grant, error) {
-	if !validPrincipalType(principalType) || !validRole(role) || strings.TrimSpace(principalID) == "" {
+	if !ValidPrincipalType(principalType) || !validRole(role) || strings.TrimSpace(principalID) == "" {
 		return Grant{}, ErrInvalidQuery
 	}
 	if err := s.requireManager(ctx, userID, projectID); err != nil {
@@ -147,7 +148,7 @@ func (s *Service) DeleteGrant(ctx context.Context, userID, projectID, grantID st
 
 func (s *Service) SearchDirectory(ctx context.Context, userID, projectID string, principalType PrincipalType, query string, limit int) ([]Principal, error) {
 	query = strings.TrimSpace(query)
-	if !validPrincipalType(principalType) || len([]rune(query)) < 2 {
+	if !ValidPrincipalType(principalType) || len([]rune(query)) < 2 {
 		return nil, ErrInvalidQuery
 	}
 	if limit <= 0 {
@@ -162,6 +163,55 @@ func (s *Service) SearchDirectory(ctx context.Context, userID, projectID string,
 	return s.store.SearchPrincipals(ctx, principalType, query, limit)
 }
 
+// AssignableActors returns the people who may be assigned on the Project.
+// Callers need OperationContribute. Agents and Squads belong to the owner
+// Workspace's inventory, so they are returned only to a human member of that
+// Workspace; a foreign collaborator receives members only.
+func (s *Service) AssignableActors(ctx context.Context, userID, projectID string, principalType PrincipalType, query string, limit int) ([]Principal, error) {
+	allowed, err := s.authz.Can(ctx, userID, projectID, r2dauth.OperationContribute)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, ErrForbidden
+	}
+	if principalType != PrincipalUser {
+		// Agent/Squad roster is served by the owner-Workspace path only and is
+		// out of scope for this endpoint; a foreign caller never reaches it.
+		return []Principal{}, nil
+	}
+	members, err := s.store.ListAssignableMembers(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return filterPrincipalsByQuery(members, query, limit), nil
+}
+
+// filterPrincipalsByQuery applies a case-insensitive substring match on the
+// principal's name and secondary label (email or slug) and bounds the result.
+func filterPrincipalsByQuery(principals []Principal, query string, limit int) []Principal {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	needle := strings.ToLower(strings.TrimSpace(query))
+	out := make([]Principal, 0, len(principals))
+	for _, p := range principals {
+		if needle != "" &&
+			!strings.Contains(strings.ToLower(p.Name), needle) &&
+			!strings.Contains(strings.ToLower(p.Secondary), needle) {
+			continue
+		}
+		out = append(out, p)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
 func (s *Service) requireManager(ctx context.Context, userID, projectID string) error {
 	allowed, err := s.authz.Can(ctx, userID, projectID, r2dauth.OperationShare)
 	if err != nil {
@@ -173,7 +223,10 @@ func (s *Service) requireManager(ctx context.Context, userID, projectID string) 
 	return nil
 }
 
-func validPrincipalType(t PrincipalType) bool {
+// ValidPrincipalType reports whether t is a principal type this package
+// understands. Exported so the HTTP layer can validate query parameters
+// against the same set the service enforces.
+func ValidPrincipalType(t PrincipalType) bool {
 	return t == PrincipalUser || t == PrincipalWorkspace
 }
 

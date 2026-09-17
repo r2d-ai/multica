@@ -17,6 +17,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { PropertyIcon } from "../../common/property-icon";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { issueAssigneeDisplay } from "../utils/assignee-display";
 import { useLocale, useT, useTimeAgo } from "../../i18n";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { PriorityIcon } from "./priority-icon";
@@ -116,7 +117,7 @@ export const BoardCardContent = memo(function BoardCardContent({
   const { getActorName } = useActorName();
   const assigneeName =
     showAssigneeName && issue.assignee_type && issue.assignee_id
-      ? getActorName(issue.assignee_type, issue.assignee_id)
+      ? issueAssigneeDisplay(issue, getActorName).name
       : null;
 
   const priorityLabel = t(($) => $.priority[issue.priority]);
@@ -158,6 +159,8 @@ export const BoardCardContent = memo(function BoardCardContent({
       <ActorAvatar
         actorType={issue.assignee_type!}
         actorId={issue.assignee_id!}
+        name={issue.assignee_name ?? undefined}
+        avatarUrl={issue.assignee_avatar_url ?? undefined}
         size="sm"
         enableHoverCard
         profileLink={false}

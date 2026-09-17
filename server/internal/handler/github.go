@@ -1943,7 +1943,7 @@ func (h *Handler) advanceIssueToDone(ctx context.Context, issue db.Issue, worksp
 	h.notifyParentOfChildDone(ctx, issue, updated)
 
 	prefix := h.getIssuePrefix(ctx, issue.WorkspaceID)
-	resp := issueToResponse(updated, prefix)
+	resp := issueToResponse(updated, prefix, nil)
 	h.fillStatusCategory(ctx, updated.WorkspaceID, &resp)
 	h.publish(protocol.EventIssueUpdated, workspaceID, "system", "", map[string]any{
 		"issue":          resp,
