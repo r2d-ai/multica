@@ -1355,6 +1355,20 @@ describe("mentionMemberItems", () => {
     expect(items.every((i) => i.type === "member")).toBe(true);
   });
 
+  // Regression: the Project branch REPLACED the Workspace member list, so a
+  // roster that was still loading (or that a viewer-only collaborator cannot
+  // fetch at all) emptied the member section.
+  it("falls back to the Workspace members while the Project roster is empty", () => {
+    const qc = new QueryClient();
+    qc.setQueryData(workspaceKeys.members("ws-1"), [
+      { user_id: "user-1", name: "Ada Lovelace", role: "member" },
+    ]);
+
+    const items = mentionMemberItems(qc, "project-1", "");
+
+    expect(items.map((i) => i.label)).toContain("Ada Lovelace");
+  });
+
   it("keeps the Workspace member list without a Project context", () => {
     const qc = new QueryClient();
     qc.setQueryData(workspaceKeys.members("ws-1"), [

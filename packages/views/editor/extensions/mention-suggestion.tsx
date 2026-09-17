@@ -726,21 +726,29 @@ export function mentionMemberItems(
   projectId: string | null | undefined,
   query: string,
 ): MentionItem[] {
+  const workspaceMembers = (): { id: string; label: string }[] => {
+    const wsId = getCurrentWsId();
+    if (!wsId) return [];
+    const members: MemberWithUser[] =
+      qc.getQueryData(workspaceKeys.members(wsId)) ?? [];
+    return members.map((member) => ({
+      id: member.user_id,
+      label: member.name,
+    }));
+  };
+
+  // The roster is a superset of the owner Workspace's members, but it is an
+  // async read that can still be in flight, and a viewer-only collaborator is
+  // not allowed to fetch it at all (the endpoint requires contribute). Falling
+  // back to the Workspace members keeps the list populated in both cases
+  // instead of emptying the member section.
   const roster: R2DProjectPrincipal[] = projectId
     ? (qc.getQueryData(r2dAssignableActorKeys.members(projectId)) ?? [])
     : [];
-  const candidates = projectId
-    ? roster.map((principal) => ({ id: principal.id, label: principal.name }))
-    : (() => {
-        const wsId = getCurrentWsId();
-        if (!wsId) return [];
-        const members: MemberWithUser[] =
-          qc.getQueryData(workspaceKeys.members(wsId)) ?? [];
-        return members.map((member) => ({
-          id: member.user_id,
-          label: member.name,
-        }));
-      })();
+  const candidates =
+    projectId && roster.length > 0
+      ? roster.map((principal) => ({ id: principal.id, label: principal.name }))
+      : workspaceMembers();
 
   const q = query.toLowerCase();
   return candidates
