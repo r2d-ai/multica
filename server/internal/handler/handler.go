@@ -1210,21 +1210,24 @@ func (h *Handler) loadInboxItemForUser(w http.ResponseWriter, r *http.Request, i
 	if !ok {
 		return db.InboxItem{}, false
 	}
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
-		return db.InboxItem{}, false
-	}
 
-	item, err := h.Queries.GetInboxItemInWorkspace(r.Context(), db.GetInboxItemInWorkspaceParams{
-		ID:          itemUUID,
-		WorkspaceID: wsUUID,
-	})
+	// Load by (id, recipient) rather than (id, active Workspace): a foreign
+	// Project collaborator's row lives under the issue owner's Workspace. The
+	// recipient pair is the enumeration boundary, and a missing row, another
+	// user's row, and a row whose Project the caller cannot currently read all
+	// share one non-disclosing 404.
+	item, projectID, err := h.Queries.R2DGetInboxItemForRecipient(r.Context(), uuidToString(itemUUID), userID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "inbox item not found")
 		return db.InboxItem{}, false
 	}
 
-	if item.RecipientType != "member" || uuidToString(item.RecipientID) != userID {
+	facts, err := h.r2dInboxProjectFacts(r.Context(), userID, r2dProjectIDList(projectID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to authorize inbox item")
+		return db.InboxItem{}, false
+	}
+	if !r2dInboxVisibleFor(projectID, uuidToString(item.WorkspaceID), workspaceID, facts) {
 		writeError(w, http.StatusNotFound, "inbox item not found")
 		return db.InboxItem{}, false
 	}
