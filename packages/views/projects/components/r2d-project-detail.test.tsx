@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { R2DProjectDetail } from "./r2d-project-detail";
 
 const mocks = vi.hoisted(() => ({
@@ -17,6 +17,11 @@ const mocks = vi.hoisted(() => ({
     isLoading: false,
     isError: false,
   },
+  sharing: {
+    data: undefined as { project_id: string; visibility: string; grants: unknown[] } | undefined,
+    isLoading: false,
+    isError: false,
+  },
 }));
 
 vi.mock("@multica/core/realtime", () => ({
@@ -24,7 +29,8 @@ vi.mock("@multica/core/realtime", () => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => mocks.capabilities,
+  useQuery: (options?: { queryKey?: readonly unknown[] }) =>
+    options?.queryKey?.[0] === "r2d-sharing-test" ? mocks.sharing : mocks.capabilities,
 }));
 
 vi.mock("@multica/core/projects/r2d-capabilities", () => ({
@@ -39,11 +45,17 @@ vi.mock("@multica/core/projects/r2d-sharing", () => ({
 }));
 
 vi.mock("./project-detail", () => ({
-  ProjectDetail: () => <div data-testid="upstream-detail" />,
+  ProjectDetail: ({ toolbarActions }: { toolbarActions?: React.ReactNode }) => (
+    <div data-testid="upstream-detail">{toolbarActions}</div>
+  ),
 }));
 
 vi.mock("./r2d-safe-project-detail", () => ({
   R2DSafeProjectDetail: () => <div data-testid="safe-detail" />,
+}));
+
+vi.mock("./r2d-project-sharing", () => ({
+  ProjectSharingDialog: () => <div data-testid="sharing-dialog" />,
 }));
 
 describe("R2DProjectDetail project realtime scope", () => {
@@ -65,6 +77,62 @@ describe("R2DProjectDetail project realtime scope", () => {
       expect(screen.getByText("Project unavailable.")).toBeTruthy();
     } finally {
       mocks.capabilities.data.read = true;
+    }
+  });
+});
+
+describe("R2DProjectDetail toolbar share affordance", () => {
+  // `full` detail mode is what the upstream toolbar belongs to, so the manager
+  // cases must also carry manage + resource visibility.
+  function withFullDetail() {
+    mocks.capabilities.data.manage = true;
+    mocks.capabilities.data.view_resources = true;
+  }
+
+  function reset() {
+    mocks.capabilities.data.manage = false;
+    mocks.capabilities.data.view_resources = false;
+    mocks.capabilities.data.share = false;
+    mocks.sharing.data = undefined;
+    mocks.sharing.isError = false;
+  }
+
+  it("injects the Share control into the upstream toolbar for a project manager", () => {
+    withFullDetail();
+    mocks.capabilities.data.share = true;
+    mocks.sharing.data = { project_id: "p-1", visibility: "workspace", grants: [] };
+    try {
+      render(<R2DProjectDetail projectId="p-1" />);
+
+      const toolbar = screen.getByTestId("upstream-detail");
+      expect(within(toolbar).getByRole("button", { name: "Share" })).toBeTruthy();
+    } finally {
+      reset();
+    }
+  });
+
+  it("renders no Share control without the share capability", () => {
+    withFullDetail();
+    mocks.sharing.data = { project_id: "p-1", visibility: "workspace", grants: [] };
+    try {
+      render(<R2DProjectDetail projectId="p-1" />);
+
+      expect(within(screen.getByTestId("upstream-detail")).queryByRole("button", { name: "Share" })).toBeNull();
+    } finally {
+      reset();
+    }
+  });
+
+  it("renders no Share control when the sharing read fails", () => {
+    withFullDetail();
+    mocks.capabilities.data.share = true;
+    mocks.sharing.isError = true;
+    try {
+      render(<R2DProjectDetail projectId="p-1" />);
+
+      expect(within(screen.getByTestId("upstream-detail")).queryByRole("button", { name: "Share" })).toBeNull();
+    } finally {
+      reset();
     }
   });
 });

@@ -134,9 +134,12 @@ function ReadOnlyIssues({ projectId }: { projectId: string }) {
 export function R2DSafeProjectDetail({
   projectId,
   capabilities,
+  toolbarActions,
 }: {
   projectId: string;
   capabilities: R2DProjectCapabilities;
+  /** Extra header controls (e.g. the manager-only Share affordance). */
+  toolbarActions?: React.ReactNode;
 }) {
   const wsId = useWorkspaceId();
   const projectQuery = useQuery(projectDetailOptions(wsId, projectId));
@@ -167,7 +170,7 @@ export function R2DSafeProjectDetail({
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-      <div className="shrink-0 space-y-3 border-b px-5 py-4 pr-28">
+      <div className="shrink-0 space-y-3 border-b px-5 py-4">
         <div className="flex items-start gap-3">
           <span className="mt-1 text-xl" aria-hidden>{project.icon || "📁"}</span>
           <div className="min-w-0 flex-1 space-y-2">
@@ -251,6 +254,9 @@ export function R2DSafeProjectDetail({
               )}
             </div>
           </div>
+          {toolbarActions ? (
+            <div className="flex shrink-0 items-center gap-1">{toolbarActions}</div>
+          ) : null}
         </div>
 
         {capabilities.view_resources && <ReadOnlyResources projectId={projectId} />}

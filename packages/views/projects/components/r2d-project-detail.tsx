@@ -13,6 +13,10 @@ import { ProjectSharingDialog } from "./r2d-project-sharing";
 import { R2DSafeProjectDetail } from "./r2d-safe-project-detail";
 import { r2dProjectDetailMode } from "./r2d-project-ui-policy";
 
+const COPY = {
+  share: "Share",
+} as const;
+
 export function R2DProjectDetail({ projectId }: { projectId: string }) {
   // Join the Project realtime room for as long as this surface is mounted so
   // Project-scoped issue / comment events reach a collaborator whose home
@@ -50,43 +54,42 @@ export function R2DProjectDetail({ projectId }: { projectId: string }) {
   const caps = capabilities.data;
   const mode = r2dProjectDetailMode(caps);
 
+  // Rendered as a real toolbar action rather than an absolutely positioned
+  // overlay so it reflows with the header controls (pin / overflow / panel)
+  // instead of drifting to a fixed corner across layouts.
+  const shareControl =
+    caps.share && sharing.data ? (
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="text-muted-foreground"
+        aria-label={COPY.share}
+        title={COPY.share}
+        onClick={() => setSharingOpen(true)}
+      >
+        <Share2 />
+      </Button>
+    ) : null;
+
   return (
     <div className="relative flex h-full min-h-0 flex-1">
       {mode === "full" ? (
-        <UpstreamProjectDetail projectId={projectId} />
+        <UpstreamProjectDetail projectId={projectId} toolbarActions={shareControl} />
       ) : (
-        <R2DSafeProjectDetail projectId={projectId} capabilities={caps} />
-      )}
-
-      {caps.share && sharing.isLoading && (
-        <Skeleton className="absolute right-28 top-2 z-20 h-7 w-16" />
-      )}
-
-      {caps.share && sharing.isError && (
-        <div className="absolute right-28 top-2 z-20 rounded-md border bg-background/95 px-2 py-1 text-caption text-muted-foreground shadow-sm">
-          Sharing unavailable
-        </div>
+        <R2DSafeProjectDetail
+          projectId={projectId}
+          capabilities={caps}
+          toolbarActions={shareControl}
+        />
       )}
 
       {caps.share && sharing.data && (
-        <>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setSharingOpen(true)}
-            className="absolute right-28 top-1.5 z-20 h-7 gap-1.5 bg-background/80 px-2 text-muted-foreground backdrop-blur hover:text-foreground"
-            title="Share"
-          >
-            <Share2 className="size-3.5" />
-            <span className="hidden sm:inline">Share</span>
-          </Button>
-          <ProjectSharingDialog
-            projectId={projectId}
-            sharing={sharing.data}
-            open={sharingOpen}
-            onOpenChange={setSharingOpen}
-          />
-        </>
+        <ProjectSharingDialog
+          projectId={projectId}
+          sharing={sharing.data}
+          open={sharingOpen}
+          onOpenChange={setSharingOpen}
+        />
       )}
     </div>
   );

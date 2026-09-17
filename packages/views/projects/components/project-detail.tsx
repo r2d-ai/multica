@@ -99,7 +99,14 @@ function PropRow({
 // ProjectDetail
 // ---------------------------------------------------------------------------
 
-export function ProjectDetail({ projectId }: { projectId: string }) {
+export function ProjectDetail({
+  projectId,
+  toolbarActions,
+}: {
+  projectId: string;
+  /** Extension seam: extra controls rendered before the built-in toolbar actions. */
+  toolbarActions?: React.ReactNode;
+}) {
   const { t } = useT("projects");
   const statusLabels = useProjectStatusLabels();
   const priorityLabels = useProjectPriorityLabels();
@@ -483,6 +490,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             leaf={<span className="truncate font-medium text-foreground">{project.title}</span>}
             actions={
               <>
+              {toolbarActions}
               <Button
                 variant="ghost"
                 size="icon-sm"
