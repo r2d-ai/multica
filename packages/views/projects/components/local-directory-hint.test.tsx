@@ -18,6 +18,23 @@ vi.mock("../../platform", () => ({
   useLocalDaemonStatus: () => mockDaemonStatus,
 }));
 
+const mockCapabilities = vi.hoisted(() => ({ viewResources: true }));
+
+vi.mock("@multica/core/projects/r2d-capabilities", () => ({
+  projectCapabilitiesOptions: (projectId: string | null | undefined) => ({
+    queryKey: ["r2d", "project-capabilities", projectId ?? ""],
+    queryFn: async () => ({
+      read: true,
+      contribute: true,
+      manage: false,
+      share: false,
+      global_observer: false,
+      view_resources: mockCapabilities.viewResources,
+    }),
+    enabled: !!projectId,
+  }),
+}));
+
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
@@ -76,6 +93,7 @@ describe("LocalDirectoryHint", () => {
     mockDaemonStatus.daemonId = null;
     mockDaemonStatus.deviceName = null;
     mockDaemonStatus.running = false;
+    mockCapabilities.viewResources = true;
     mockListResources.mockReset();
   });
 
@@ -97,6 +115,31 @@ describe("LocalDirectoryHint", () => {
     });
     const { container } = renderHint("proj-1");
     expect(container.firstChild).toBeNull();
+  });
+
+  // Regression: the hint is desktop-only (it matches resources against the
+  // LOCAL daemon), but the query ran on web too, so every web issue view fired
+  // GET /api/projects/{id}/resources. For a collaborator whose Workspace is not
+  // the Project owner's that endpoint is 404 by design, so the console filled
+  // with a 404 on every Project issue.
+  it("does not request project resources without a local daemon", async () => {
+    renderHint("proj-1");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockListResources).not.toHaveBeenCalled();
+  });
+
+  // Same request, desktop: Project resources can carry owner-Workspace repo
+  // URLs and local paths, so a collaborator granted the Project cannot read
+  // them. `view_resources` is the server's signal for that boundary.
+  it("does not request project resources when the Project's resources are not readable", async () => {
+    mockDaemonStatus.daemonId = "daemon-A";
+    mockDaemonStatus.running = true;
+    mockCapabilities.viewResources = false;
+    renderHint("proj-1");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockListResources).not.toHaveBeenCalled();
   });
 
   it("renders the hint when a local_directory resource matches this daemon", async () => {
