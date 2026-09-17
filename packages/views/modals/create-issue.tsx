@@ -1009,6 +1009,7 @@ export function ManualCreatePanel({
                 <AssigneePicker
                   assigneeType={assigneeType ?? null}
                   assigneeId={assigneeId ?? null}
+                  projectId={projectId}
                   onUpdate={(u) => updateAssignee(
                     u.assignee_type ?? undefined,
                     u.assignee_id ?? undefined,

@@ -88,6 +88,7 @@
     "./projects/config": "./projects/config.ts",
     "./projects/r2d-capabilities": "./projects/r2d-capabilities.ts",
     "./projects/r2d-sharing": "./projects/r2d-sharing.ts",
+    "./projects/r2d-assignable-actors": "./projects/r2d-assignable-actors.ts",
     "./plugins": "./plugins/index.ts",
     "./plugins/queries": "./plugins/queries.ts",
     "./plugins/mutations": "./plugins/mutations.ts",

@@ -73,6 +73,16 @@ export function BatchActionToolbar({
     [selectedIssues],
   );
 
+  // The assignee roster is Project-scoped, so it is only safe to load when the
+  // whole selection shares one Project. A mixed selection keeps the active
+  // Workspace's member list.
+  const sharedProjectId = useMemo(() => {
+    const first = selectedIssues[0]?.project_id ?? null;
+    return selectedIssues.every((issue) => (issue.project_id ?? null) === first)
+      ? first
+      : null;
+  }, [selectedIssues]);
+
   const [statusOpen, setStatusOpen] = useState(false);
   const [priorityOpen, setPriorityOpen] = useState(false);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
@@ -245,6 +255,7 @@ export function BatchActionToolbar({
         <AssigneePicker
           assigneeType={common.assignee?.type ?? null}
           assigneeId={common.assignee?.id ?? null}
+          projectId={sharedProjectId}
           mixed={common.assignee === null}
           onUpdate={handleBatchAssignee}
           open={assigneeOpen}

@@ -880,6 +880,7 @@ function SubIssueRow({
             assigneeId={child.assignee_id}
             assigneeName={child.assignee_name}
             assigneeAvatarUrl={child.assignee_avatar_url}
+            projectId={child.project_id}
             onUpdate={handleUpdate}
             align="end"
             trigger={
@@ -2327,6 +2328,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             assigneeId={issue.assignee_id}
             assigneeName={issue.assignee_name}
             assigneeAvatarUrl={issue.assignee_avatar_url}
+            projectId={issue.project_id}
             onUpdate={handleUpdateField}
             align="start"
           />

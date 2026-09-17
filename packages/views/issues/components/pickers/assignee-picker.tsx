@@ -10,6 +10,7 @@ import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions, agentListOptions, squadListOptions, assigneeFrequencyOptions } from "@multica/core/workspace/queries";
+import { projectAssignableActorsOptions } from "@multica/core/projects/r2d-assignable-actors";
 import { ActorAvatar } from "../../../common/actor-avatar";
 import { DeferredPopup } from "../../../common/deferred-popup";
 import {
@@ -40,9 +41,24 @@ export function canAssignAgent(
   }).allowed;
 }
 
+/** One member row, however it was sourced (Workspace list or Project roster). */
+interface AssigneeMemberOption {
+  user_id: string;
+  name: string;
+  avatar_url?: string | null;
+}
+
 interface AssigneePickerProps {
   assigneeType: IssueAssigneeType | null;
   assigneeId: string | null;
+  /**
+   * The Project the assignment targets, when the surface knows it (an Issue's
+   * `project_id`, or the Project chosen while creating one). It switches the
+   * member section to the Project's assignable roster, which is the only
+   * source that names a collaborator from another Workspace. Omit it on a
+   * surface with no single Project (a batch spanning Projects).
+   */
+  projectId?: string | null;
   /**
    * Server-resolved display for the current assignee. Passed by surfaces that
    * hold the Issue payload so a collaborator from another Workspace renders by
@@ -101,6 +117,7 @@ function AssigneePickerImpl({
   assigneeId,
   assigneeName,
   assigneeAvatarUrl,
+  projectId,
   mixed = false,
   onUpdate,
   trigger: customTrigger,
@@ -116,13 +133,25 @@ function AssigneePickerImpl({
   const [filter, setFilter] = useState("");
   const user = useAuthStore((s) => s.user);
   const wsId = useWorkspaceId();
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
+  // The Project roster is the member source whenever the surface names a
+  // Project; the Workspace list stays the fallback and still owns the caller's
+  // own role, which Agent/Squad permission checks depend on.
+  const { data: projectActors } = useQuery(projectAssignableActorsOptions(projectId));
+  const members = useMemo<AssigneeMemberOption[]>(() => {
+    if (!projectId || !projectActors) return workspaceMembers;
+    return projectActors.map((actor) => ({
+      user_id: actor.id,
+      name: actor.name,
+      avatar_url: actor.avatar_url ?? null,
+    }));
+  }, [projectId, projectActors, workspaceMembers]);
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: squads = [] } = useQuery(squadListOptions(wsId));
   const { data: frequency = [] } = useQuery(assigneeFrequencyOptions(wsId));
   const { getActorName } = useActorName();
 
-  const currentMember = members.find((m) => m.user_id === user?.id);
+  const currentMember = workspaceMembers.find((m) => m.user_id === user?.id);
   const memberRole = currentMember?.role;
 
   // Build a lookup map from frequency data for sorting.
@@ -222,7 +251,13 @@ function AssigneePickerImpl({
                 setOpen(false);
               }}
             >
-              <ActorAvatar actorType="member" actorId={m.user_id} size="sm" />
+              <ActorAvatar
+                actorType="member"
+                actorId={m.user_id}
+                name={m.name}
+                avatarUrl={m.avatar_url ?? undefined}
+                size="sm"
+              />
               <span className="truncate">{m.name}</span>
             </PickerItem>
           ))}
