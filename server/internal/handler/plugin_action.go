@@ -449,7 +449,7 @@ func (h *Handler) pluginIssuePayload(r *http.Request, caller service.PluginActio
 	if workspace, err := h.Queries.GetWorkspace(r.Context(), caller.WorkspaceID); err == nil {
 		prefix = workspace.IssuePrefix
 	}
-	app := issueToResponse(issue, prefix)
+	app := issueToResponse(issue, prefix, nil)
 	return publicapiv1.Issue{
 		ID:             app.ID,
 		WorkspaceID:    app.WorkspaceID,

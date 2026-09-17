@@ -670,10 +670,6 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 		}
 		assigneeID = parsed
 	}
-	if code, message := h.validateAssigneePair(r.Context(), r, util.UUIDToString(workspaceID), assigneeType, assigneeID); code != 0 {
-		writeError(w, code, message)
-		return errSourceContextResponseWritten
-	}
 	var projectID pgtype.UUID
 	if input.ProjectID != nil && strings.TrimSpace(*input.ProjectID) != "" {
 		parsed, err := util.ParseUUID(strings.TrimSpace(*input.ProjectID))
@@ -681,6 +677,10 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 			return sourceContextBadRequest("invalid project_id")
 		}
 		projectID = parsed
+	}
+	if code, message := h.validateAssigneePair(r.Context(), r, util.UUIDToString(workspaceID), util.UUIDToString(projectID), assigneeType, assigneeID); code != 0 {
+		writeError(w, code, message)
+		return errSourceContextResponseWritten
 	}
 	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, input.AttachmentIDs, "attachment_ids")
 	if !ok {
@@ -725,7 +725,7 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 	}, service.IssueCreateOpts{
 		ActorID: util.UUIDToString(userID),
 		BroadcastPayload: func(issue db.Issue, _ []db.Attachment, labels []db.IssueLabel) map[string]any {
-			response := issueToResponse(issue, prefix)
+			response := issueToResponse(issue, prefix, h.r2dAssigneeDisplayForIssues(r.Context(), util.UUIDToString(userID), []db.Issue{issue}))
 			labelResponses := labelsToResponse(labels)
 			response.Labels = &labelResponses
 			return map[string]any{"issue": response}
@@ -734,7 +734,7 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		return err
 	}
-	response := issueToResponse(result.Issue, prefix)
+	response := issueToResponse(result.Issue, prefix, h.r2dAssigneeDisplayForIssues(r.Context(), util.UUIDToString(userID), []db.Issue{result.Issue}))
 	h.fillStatusCategory(r.Context(), workspaceID, &response)
 	labelResponses := labelsToResponse(result.Labels)
 	response.Labels = &labelResponses
@@ -783,7 +783,7 @@ func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Req
 		}
 		agentID = parsed
 	}
-	if status, message := h.validateAssigneePair(r.Context(), r, util.UUIDToString(workspaceID), pgtype.Text{String: "agent", Valid: true}, agentID); status != 0 {
+	if status, message := h.validateAssigneePair(r.Context(), r, util.UUIDToString(workspaceID), "", pgtype.Text{String: "agent", Valid: true}, agentID); status != 0 {
 		writeError(w, status, message)
 		return nil, errSourceContextResponseWritten
 	}

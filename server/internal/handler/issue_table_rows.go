@@ -504,11 +504,16 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
 		issueIDs[index] = row.issue.ID
 	}
 	labelsByIssue := baseHandler.labelsByIssue(r.Context(), compiled.workspaceID, issueIDs)
+	tableIssues := make([]db.ListIssuesRow, 0, len(scanned))
+	for _, row := range scanned {
+		tableIssues = append(tableIssues, row.issue)
+	}
+	display := baseHandler.r2dAssigneeDisplayForRefs(r.Context(), requestUserID(r), r2dAssigneeRefsForListRows(tableIssues))
 	// One Resolver for the page — see newStatusCategoryFiller. (MUL-6243)
 	fillTableRow := baseHandler.newStatusCategoryFiller(r.Context(), compiled.workspaceID)
 	responseRows := make([]issueTableRowResponse, len(scanned))
 	for index, row := range scanned {
-		issue := issueListRowToResponse(row.issue, prefix)
+		issue := issueListRowToResponse(row.issue, prefix, display)
 		fillTableRow(&issue)
 		labels := labelsByIssue[issue.ID]
 		if labels == nil {

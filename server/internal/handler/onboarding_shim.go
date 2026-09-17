@@ -320,7 +320,7 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 	}
 	if issueCreated {
 		prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
-		resp := issueToResponse(issue, prefix)
+		resp := issueToResponse(issue, prefix, h.r2dAssigneeDisplayForIssues(r.Context(), userID, []db.Issue{issue}))
 		h.fillStatusCategory(r.Context(), issue.WorkspaceID, &resp)
 		h.publish(protocol.EventIssueCreated, req.WorkspaceID, "member", userID, map[string]any{"issue": resp})
 		platform, _, _ := middleware.ClientMetadataFromContext(r.Context())
@@ -466,7 +466,7 @@ func (h *Handler) BootstrapOnboardingNoRuntime(w http.ResponseWriter, r *http.Re
 
 	if issueCreated {
 		prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
-		resp := issueToResponse(issue, prefix)
+		resp := issueToResponse(issue, prefix, h.r2dAssigneeDisplayForIssues(r.Context(), userID, []db.Issue{issue}))
 		h.fillStatusCategory(r.Context(), issue.WorkspaceID, &resp)
 		h.publish(protocol.EventIssueCreated, req.WorkspaceID, "member", userID, map[string]any{"issue": resp})
 		platform2, _, _ := middleware.ClientMetadataFromContext(r.Context())

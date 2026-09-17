@@ -59,15 +59,20 @@ type IssueResponse struct {
 	// field at all: with omitempty a built-in fixture hides it from BOTH
 	// renderings, and the drift guard goes green on a payload that has drifted.
 	// (MUL-6749)
-	StatusName    string  `json:"status_name"`
-	Priority      string  `json:"priority"`
-	AssigneeType  *string `json:"assignee_type"`
-	AssigneeID    *string `json:"assignee_id"`
-	CreatorType   string  `json:"creator_type"`
-	CreatorID     string  `json:"creator_id"`
-	ParentIssueID *string `json:"parent_issue_id"`
-	ProjectID     *string `json:"project_id"`
-	Position      float64 `json:"position"`
+	StatusName   string  `json:"status_name"`
+	Priority     string  `json:"priority"`
+	AssigneeType *string `json:"assignee_type"`
+	AssigneeID   *string `json:"assignee_id"`
+	// AssigneeName/AssigneeAvatarURL are server-resolved so a collaborator from
+	// another Workspace renders by name instead of falling back to "Unknown".
+	// Omitted when the caller may not enumerate the assignee.
+	AssigneeName      *string `json:"assignee_name,omitempty"`
+	AssigneeAvatarURL *string `json:"assignee_avatar_url,omitempty"`
+	CreatorType       string  `json:"creator_type"`
+	CreatorID         string  `json:"creator_id"`
+	ParentIssueID     *string `json:"parent_issue_id"`
+	ProjectID         *string `json:"project_id"`
+	Position          float64 `json:"position"`
 	// Stage groups sub-issues under the same parent into ordered barrier
 	// groups (null = unstaged). See issue_child_done.go for how a closed
 	// stage gates the child-done -> parent wake.
@@ -323,7 +328,7 @@ func (h *Handler) fillStatusCategory(ctx context.Context, wsID pgtype.UUID, resp
 	h.newStatusCategoryFiller(ctx, wsID)(resp)
 }
 
-func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
+func issueToResponse(i db.Issue, issuePrefix string, display map[string]R2DAssigneeDisplay) IssueResponse {
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
 	// Built-ins map to public categories without a catalog lookup. A custom
 	// status is filled by endpoints that resolve the workspace catalog.
@@ -331,7 +336,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 	if issuestatus.IsBuiltIn(i.Status) {
 		statusCategory = i.Status
 	}
-	return IssueResponse{
+	resp := IssueResponse{
 		ID:             uuidToString(i.ID),
 		WorkspaceID:    uuidToString(i.WorkspaceID),
 		Number:         i.Number,
@@ -358,17 +363,19 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		Metadata:       parseIssueMetadata(i.Metadata),
 		Properties:     parseIssueProperties(i.Properties),
 	}
+	applyAssigneeDisplay(&resp, display, i.AssigneeType, i.AssigneeID)
+	return resp
 }
 
 // issueListRowToResponse converts a list-query row (no description) to an IssueResponse.
-func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueResponse {
+func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string, display map[string]R2DAssigneeDisplay) IssueResponse {
 	// Same pure built-in resolution as issueToResponse. (MUL-6243)
 	statusCategory := ""
 	if issuestatus.IsBuiltIn(i.Status) {
 		statusCategory = i.Status
 	}
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
-	return IssueResponse{
+	resp := IssueResponse{
 		ID:             uuidToString(i.ID),
 		WorkspaceID:    uuidToString(i.WorkspaceID),
 		Number:         i.Number,
@@ -395,6 +402,8 @@ func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueRespons
 		Metadata:       parseIssueMetadata(i.Metadata),
 		Properties:     parseIssueProperties(i.Properties),
 	}
+	applyAssigneeDisplay(&resp, display, i.AssigneeType, i.AssigneeID)
+	return resp
 }
 
 // labelsByIssue bulk-loads labels for the given issue IDs and returns a map
@@ -430,14 +439,14 @@ func (h *Handler) labelsByIssue(ctx context.Context, wsUUID pgtype.UUID, issueID
 	return out
 }
 
-func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueResponse {
+func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string, display map[string]R2DAssigneeDisplay) IssueResponse {
 	// Same pure built-in resolution as issueToResponse. (MUL-6243)
 	statusCategory := ""
 	if issuestatus.IsBuiltIn(i.Status) {
 		statusCategory = i.Status
 	}
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
-	return IssueResponse{
+	resp := IssueResponse{
 		ID:             uuidToString(i.ID),
 		WorkspaceID:    uuidToString(i.WorkspaceID),
 		Number:         i.Number,
@@ -464,6 +473,8 @@ func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueRes
 		Metadata:       parseIssueMetadata(i.Metadata),
 		Properties:     parseIssueProperties(i.Properties),
 	}
+	applyAssigneeDisplay(&resp, display, i.AssigneeType, i.AssigneeID)
+	return resp
 }
 
 type IssueAssigneeGroupResponse struct {
@@ -1071,10 +1082,15 @@ func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 
 	prefix := h.getIssuePrefix(ctx, wsUUID)
 	fillSearch := h.newStatusCategoryFiller(ctx, wsUUID)
+	searchIssues := make([]db.Issue, 0, len(results))
+	for _, sr := range results {
+		searchIssues = append(searchIssues, sr.issue)
+	}
+	display := h.r2dAssigneeDisplayForIssues(ctx, requestUserID(r), searchIssues)
 	resp := make([]SearchIssueResponse, len(results))
 	for i, sr := range results {
 		sir := SearchIssueResponse{
-			IssueResponse: issueToResponse(sr.issue, prefix),
+			IssueResponse: issueToResponse(sr.issue, prefix, display),
 			MatchSource:   sr.matchSource,
 		}
 		fillSearch(&sir.IssueResponse)
@@ -1243,9 +1259,10 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		labelsMap := h.labelsByIssue(ctx, wsUUID, ids)
 		fillOpen := h.newStatusCategoryFiller(ctx, wsUUID)
+		display := h.r2dAssigneeDisplayForRefs(ctx, requestUserID(r), r2dAssigneeRefsForOpenRows(issues))
 		resp := make([]IssueResponse, len(issues))
 		for i, issue := range issues {
-			resp[i] = openIssueRowToResponse(issue, prefix)
+			resp[i] = openIssueRowToResponse(issue, prefix, display)
 			fillOpen(&resp[i])
 			labels := labelsMap[resp[i].ID]
 			if labels == nil {
@@ -1659,9 +1676,10 @@ LIMIT %s OFFSET %s`, whereSql, orderBy, limitRef, offsetRef)
 		ids[i] = issue.ID
 	}
 	labelsMap := h.labelsByIssue(ctx, wsUUID, ids)
+	display := h.r2dAssigneeDisplayForRefs(ctx, requestUserID(r), r2dAssigneeRefsForListRows(issues))
 	resp := make([]IssueResponse, len(issues))
 	for i, issue := range issues {
-		resp[i] = issueListRowToResponse(issue, prefix)
+		resp[i] = issueListRowToResponse(issue, prefix, display)
 		labels := labelsMap[resp[i].ID]
 		if labels == nil {
 			labels = []LabelResponse{}
@@ -2272,6 +2290,16 @@ ORDER BY
 	// One Resolver for the whole page — a per-row filler would query the
 	// catalog once per custom-status row. (MUL-6243)
 	fillGrouped := h.newStatusCategoryFiller(ctx, wsUUID)
+	groupRefs := make([]r2dAssigneeRef, 0, len(groupedRows))
+	for _, row := range groupedRows {
+		groupRefs = append(groupRefs, r2dAssigneeRef{
+			Type:        row.AssigneeType,
+			ID:          row.AssigneeID,
+			ProjectID:   row.ProjectID,
+			WorkspaceID: row.WorkspaceID,
+		})
+	}
+	display := h.r2dAssigneeDisplayForRefs(ctx, requestUserID(r), groupRefs)
 
 	groups := []IssueAssigneeGroupResponse{}
 	groupIndex := map[string]int{}
@@ -2290,7 +2318,7 @@ ORDER BY
 			})
 		}
 
-		issue := issueListRowToResponse(row.ListIssuesRow, prefix)
+		issue := issueListRowToResponse(row.ListIssuesRow, prefix, display)
 		fillGrouped(&issue)
 		labels := labelsMap[issue.ID]
 		if labels == nil {
@@ -2310,7 +2338,8 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
-	resp := issueToResponse(issue, prefix)
+	display := h.r2dAssigneeDisplayForIssues(r.Context(), requestUserID(r), []db.Issue{issue})
+	resp := issueToResponse(issue, prefix, display)
 	h.fillStatusCategory(r.Context(), issue.WorkspaceID, &resp)
 	detailLabels := h.labelsByIssue(r.Context(), issue.WorkspaceID, []pgtype.UUID{issue.ID})[uuidToString(issue.ID)]
 	if detailLabels == nil {
@@ -2377,9 +2406,10 @@ func (h *Handler) ListChildIssues(w http.ResponseWriter, r *http.Request) {
 	// built-in statuses still cost no query, and a list full of custom ones
 	// costs one catalog read rather than one per row.
 	statusResolver := issuestatus.NewResolver(issue.WorkspaceID)
+	display := h.r2dAssigneeDisplayForIssues(r.Context(), requestUserID(r), children)
 	resp := make([]IssueResponse, len(children))
 	for i, child := range children {
-		resp[i] = issueToResponse(child, prefix)
+		resp[i] = issueToResponse(child, prefix, display)
 		resp[i].StatusCategory = issuestatus.WireCategory(child.Status, statusResolver.Category(r.Context(), h.Queries, child.Status))
 		labels := labelsMap[resp[i].ID]
 		if labels == nil {
@@ -2463,9 +2493,10 @@ func (h *Handler) ListChildrenByParents(w http.ResponseWriter, r *http.Request) 
 	// built-in statuses still cost no query, and a list full of custom ones
 	// costs one catalog read rather than one per row.
 	statusResolver := issuestatus.NewResolver(wsUUID)
+	display := h.r2dAssigneeDisplayForIssues(r.Context(), requestUserID(r), children)
 	resp := make([]IssueResponse, len(children))
 	for i, child := range children {
-		resp[i] = issueToResponse(child, prefix)
+		resp[i] = issueToResponse(child, prefix, display)
 		resp[i].StatusCategory = issuestatus.WireCategory(child.Status, statusResolver.Category(r.Context(), h.Queries, child.Status))
 		labels := labelsMap[resp[i].ID]
 		if labels == nil {
@@ -2648,7 +2679,7 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 	// apply — a private leader behind a squad the user can't reach
 	// should still be rejected.
 	if status, msg := h.validateAssigneePair(
-		r.Context(), r, workspaceID,
+		r.Context(), r, workspaceID, "",
 		pgtype.Text{String: "agent", Valid: true},
 		agentUUID,
 	); status != 0 {
@@ -2971,11 +3002,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if status, msg := h.validateAssigneePair(r.Context(), r, workspaceID, assigneeType, assigneeID); status != 0 {
-		writeError(w, status, msg)
-		return
-	}
-
 	if req.ProjectID != nil {
 		id, ok := parseUUIDOrBadRequest(w, *req.ProjectID, "project_id")
 		if !ok {
@@ -2983,6 +3009,12 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		projectID = id
 	}
+
+	if status, msg := h.validateAssigneePair(r.Context(), r, workspaceID, uuidToString(projectID), assigneeType, assigneeID); status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+
 	// Project existence and the final parent boundary check are enforced inside
 	// IssueService.Create atomically with the create. The handler preloads a
 	// supplied parent only because the assignee gate must bind any autopilot
@@ -3129,7 +3161,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		AnalyticsAgentID: analyticsAgentID,
 		Platform:         func() string { p, _, _ := middleware.ClientMetadataFromContext(r.Context()); return p }(),
 		BroadcastPayload: func(issue db.Issue, atts []db.Attachment, labels []db.IssueLabel) map[string]any {
-			payload := issueToResponse(issue, prefix)
+			payload := issueToResponse(issue, prefix, h.r2dAssigneeDisplayForIssues(r.Context(), requestUserID(r), []db.Issue{issue}))
 			// The event other tabs receive must carry the category too — filling
 			// only the HTTP response below is too late for them, and a create
 			// they cannot bucket forces a full refetch. Shares one filler with
@@ -3149,7 +3181,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	if errors.Is(err, service.ErrActiveDuplicate) {
 		dup := *res.DuplicateIssue
-		existing := issueToResponse(dup, h.getIssuePrefix(r.Context(), dup.WorkspaceID))
+		existing := issueToResponse(dup, h.getIssuePrefix(r.Context(), dup.WorkspaceID), h.r2dAssigneeDisplayForIssues(r.Context(), requestUserID(r), []db.Issue{dup}))
 		h.fillStatusCategory(r.Context(), dup.WorkspaceID, &existing)
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"code":  "active_duplicate_issue",
@@ -3187,7 +3219,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	issue := res.Issue
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
 
-	resp := issueToResponse(issue, prefix)
+	resp := issueToResponse(issue, prefix, h.r2dAssigneeDisplayForIssues(r.Context(), requestUserID(r), []db.Issue{issue}))
 	fillCreated(&resp)
 	resp.Attachments = buildAttachmentResponses(res.Attachments)
 	// Echo the authoritative labels attached in the create transaction. Always
@@ -3636,7 +3668,11 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	_, touchedType := rawFields["assignee_type"]
 	_, touchedID := rawFields["assignee_id"]
 	if touchedType || touchedID {
-		if status, msg := h.validateAssigneePair(r.Context(), r, workspaceID, params.AssigneeType, params.AssigneeID); status != 0 {
+		// params.ProjectID already holds the destination when the caller moves
+		// the issue and the current Project otherwise (see
+		// refreshUntouchedNullableIssueParams), so it is the effective Project
+		// for the resulting assignee.
+		if status, msg := h.validateAssigneePair(r.Context(), r, workspaceID, uuidToString(params.ProjectID), params.AssigneeType, params.AssigneeID); status != 0 {
 			writeError(w, status, msg)
 			return
 		}
@@ -3688,7 +3724,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
-	resp := issueToResponse(issue, prefix)
+	resp := issueToResponse(issue, prefix, h.r2dAssigneeDisplayForIssues(r.Context(), userID, []db.Issue{issue}))
 	slog.Info("issue updated", append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", workspaceID)...)
 
 	h.fillStatusCategory(r.Context(), issue.WorkspaceID, &resp)
@@ -3797,7 +3833,11 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 // Returns (statusCode, errorMessage). statusCode == 0 means the pair is valid;
 // callers should treat any non-zero status as a rejection and surface it back
 // to the client.
-func (h *Handler) validateAssigneePair(ctx context.Context, r *http.Request, workspaceID string, assigneeType pgtype.Text, assigneeID pgtype.UUID) (int, string) {
+//
+// projectID is the Project the issue belongs (or will belong) to. It may be
+// empty for a projectless issue; a member assignee from another Workspace is
+// accepted only when that Project's grant makes them assignable.
+func (h *Handler) validateAssigneePair(ctx context.Context, r *http.Request, workspaceID, projectID string, assigneeType pgtype.Text, assigneeID pgtype.UUID) (int, string) {
 	// Both unset → unassigned issue, valid.
 	if !assigneeType.Valid && !assigneeID.Valid {
 		return 0, ""
@@ -3816,6 +3856,11 @@ func (h *Handler) validateAssigneePair(ctx context.Context, r *http.Request, wor
 			UserID:      assigneeID,
 			WorkspaceID: wsUUID,
 		}); err != nil {
+			// A Project grant may assign a user who is assignable on that
+			// Project even when they are not a member of its Workspace.
+			if projectID != "" && h.r2dMemberAssignable(ctx, workspaceID, projectID, util.UUIDToString(assigneeID)) {
+				return 0, ""
+			}
 			return http.StatusBadRequest, "assignee_id does not refer to a member of this workspace"
 		}
 		return 0, ""
@@ -4110,7 +4155,7 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 
 func (h *Handler) publishDetachedChildren(ctx context.Context, children []db.Issue, actorType, actorID string) {
 	for _, child := range children {
-		response := issueToResponse(child, h.getIssuePrefix(ctx, child.WorkspaceID))
+		response := issueToResponse(child, h.getIssuePrefix(ctx, child.WorkspaceID), nil)
 		h.fillStatusCategory(ctx, child.WorkspaceID, &response)
 		h.publish(protocol.EventIssueUpdated, uuidToString(child.WorkspaceID), actorType, actorID, map[string]any{"issue": response})
 	}
@@ -4385,7 +4430,11 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		_, batchTouchedType := rawUpdates["assignee_type"]
 		_, batchTouchedID := rawUpdates["assignee_id"]
 		if batchTouchedType || batchTouchedID {
-			if status, _ := h.validateAssigneePair(r.Context(), r, workspaceID, params.AssigneeType, params.AssigneeID); status != 0 {
+			// params.ProjectID is this iteration's effective Project: the
+			// batch-wide destination when project_id is in the update, else the
+			// issue's own. The middleware keeps a multi-Project batch foreign
+			// caller from reaching this point with an assignee write at all.
+			if status, _ := h.validateAssigneePair(r.Context(), r, workspaceID, uuidToString(params.ProjectID), params.AssigneeType, params.AssigneeID); status != 0 {
 				continue
 			}
 		}
@@ -4421,7 +4470,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 
 		prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
-		resp := issueToResponse(issue, prefix)
+		resp := issueToResponse(issue, prefix, h.r2dAssigneeDisplayForIssues(r.Context(), userID, []db.Issue{issue}))
 		actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 		fillBatch(&resp)
