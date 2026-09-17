@@ -130,10 +130,10 @@ func TestStripProjectScopedLeaks(t *testing.T) {
 // to ScopeProject, a projectless or owner-Workspace-only event must not, and no
 // Project frame may carry owner-Workspace-only fields.
 func TestRegisterListeners_ProjectFanoutMatrix(t *testing.T) {
-	projectIssue := func(projectID any) map[string]any {
+	projectIssue := func(issueID string, projectID any) map[string]any {
 		return map[string]any{
 			"issue": map[string]any{
-				"id":             "issue-1",
+				"id":             issueID,
 				"project_id":     projectID,
 				"title":          "shared",
 				"repo_url":       "git@example.com:owner/private.git",
@@ -152,14 +152,14 @@ func TestRegisterListeners_ProjectFanoutMatrix(t *testing.T) {
 		{
 			name:          "project-backed issue created fans to project and workspace",
 			eventType:     protocol.EventIssueCreated,
-			payload:       projectIssue("project-1"),
+			payload:       projectIssue("issue-1", "project-1"),
 			wantScopeID:   "project-1",
 			wantWorkspace: true,
 		},
 		{
 			name:          "project-backed issue updated fans to project and workspace",
 			eventType:     protocol.EventIssueUpdated,
-			payload:       projectIssue("project-1"),
+			payload:       projectIssue("issue-1", "project-1"),
 			wantScopeID:   "project-1",
 			wantWorkspace: true,
 		},
@@ -187,7 +187,7 @@ func TestRegisterListeners_ProjectFanoutMatrix(t *testing.T) {
 		{
 			name:          "projectless issue stays owner-workspace-only",
 			eventType:     protocol.EventIssueCreated,
-			payload:       projectIssue(nil),
+			payload:       projectIssue("issue-projectless", nil),
 			wantWorkspace: true,
 		},
 		{
@@ -264,6 +264,114 @@ func TestRegisterListeners_ProjectResolutionFailureIsNotFatal(t *testing.T) {
 	}
 	if len(fb.scopeCalls) != 0 {
 		t.Fatalf("resolver failure emitted project fanout: %+v", fb.scopeCalls)
+	}
+}
+
+// TestBroadcastProjectScoped_AuthoritativeProjectWins is the P07-B regression
+// for realtime Project routing: the destination room is derived from the
+// authoritative Issue -> Project binding at fan-out time, never from the
+// producer-supplied payload. A payload that disagrees fails closed.
+func TestBroadcastProjectScoped_AuthoritativeProjectWins(t *testing.T) {
+	fullIssue := func(issueID string, projectID any) map[string]any {
+		return map[string]any{"issue": map[string]any{"id": issueID, "project_id": projectID}}
+	}
+
+	cases := []struct {
+		name            string
+		payload         any
+		authoritative   map[string]string
+		wantResolveCall string
+		wantScopeID     string
+	}{
+		{
+			name:            "matching payload routes to the authoritative project",
+			payload:         fullIssue("issue-1", "project-1"),
+			authoritative:   map[string]string{"issue-1": "project-1"},
+			wantResolveCall: "issue-1",
+			wantScopeID:     "project-1",
+		},
+		{
+			name:            "issue moved A -> B: stale A payload never reaches A",
+			payload:         fullIssue("issue-1", "project-A"),
+			authoritative:   map[string]string{"issue-1": "project-B"},
+			wantResolveCall: "issue-1",
+		},
+		{
+			name:            "project-backed -> projectless: stale project payload does not reach a project room",
+			payload:         fullIssue("issue-1", "project-A"),
+			authoritative:   map[string]string{"issue-1": ""},
+			wantResolveCall: "issue-1",
+		},
+		{
+			name:            "stale projectless payload follows the authoritative project",
+			payload:         fullIssue("issue-1", nil),
+			authoritative:   map[string]string{"issue-1": "project-1"},
+			wantResolveCall: "issue-1",
+			wantScopeID:     "project-1",
+		},
+		{
+			name:    "missing issue id fails closed even with a payload project",
+			payload: map[string]any{"issue": map[string]any{"project_id": "project-1"}},
+		},
+		{
+			name:    "payload-only project id without an issue target fails closed",
+			payload: map[string]any{"project_id": "project-1"},
+		},
+		{
+			name:            "unknown issue with a payload project fails closed",
+			payload:         fullIssue("issue-unknown", "project-1"),
+			authoritative:   map[string]string{},
+			wantResolveCall: "issue-unknown",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fb := &fakeBroadcaster{}
+			resolver := &fakeProjectResolver{projects: tc.authoritative}
+			broadcastProjectScoped(events.Event{
+				Type:        protocol.EventIssueUpdated,
+				WorkspaceID: "ws-owner",
+				ActorType:   "member",
+				ActorID:     "user-1",
+				Payload:     tc.payload,
+			}, fb, resolver)
+
+			if tc.wantResolveCall == "" {
+				if len(resolver.calls) != 0 {
+					t.Fatalf("resolver calls = %v, want none", resolver.calls)
+				}
+			} else if len(resolver.calls) != 1 || resolver.calls[0] != tc.wantResolveCall {
+				t.Fatalf("resolver calls = %v, want [%s]", resolver.calls, tc.wantResolveCall)
+			}
+
+			if tc.wantScopeID == "" {
+				if len(fb.scopeCalls) != 0 {
+					t.Fatalf("unexpected project fanout: %+v", fb.scopeCalls)
+				}
+				return
+			}
+			if len(fb.scopeCalls) != 1 || fb.scopeCalls[0].scopeType != realtime.ScopeProject || fb.scopeCalls[0].scopeID != tc.wantScopeID {
+				t.Fatalf("scope calls = %+v, want one to (%q, %q)", fb.scopeCalls, realtime.ScopeProject, tc.wantScopeID)
+			}
+		})
+	}
+}
+
+// TestBroadcastProjectScoped_ResolverErrorNeverUsesPayloadProject pins that a
+// resolution failure skips the Project room entirely instead of falling back
+// to the unverified payload Project id.
+func TestBroadcastProjectScoped_ResolverErrorNeverUsesPayloadProject(t *testing.T) {
+	fb := &fakeBroadcaster{}
+	resolver := &fakeProjectResolver{err: errors.New("db down")}
+	broadcastProjectScoped(events.Event{
+		Type:        protocol.EventIssueUpdated,
+		WorkspaceID: "ws-owner",
+		Payload:     map[string]any{"issue": map[string]any{"id": "issue-1", "project_id": "project-1"}},
+	}, fb, resolver)
+
+	if len(fb.scopeCalls) != 0 {
+		t.Fatalf("resolver error fell back to a payload project: %+v", fb.scopeCalls)
 	}
 }
 
