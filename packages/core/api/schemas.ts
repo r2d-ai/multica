@@ -1236,6 +1236,11 @@ export const IssueSchema = z.object({
   priority: z.string(),
   assignee_type: z.string().nullable(),
   assignee_id: z.string().nullable(),
+  // Server-resolved assignee display. Optional: an older backend omits it, and
+  // a current backend omits it when the caller may not enumerate the assignee.
+  // .catch(undefined) so one malformed additive name cannot blank the list.
+  assignee_name: z.string().nullish().catch(undefined),
+  assignee_avatar_url: z.string().nullish().catch(undefined),
   creator_type: z.string(),
   creator_id: z.string(),
   parent_issue_id: z.string().nullable(),

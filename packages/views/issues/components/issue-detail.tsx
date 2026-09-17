@@ -878,6 +878,8 @@ function SubIssueRow({
           <AssigneePicker
             assigneeType={child.assignee_type}
             assigneeId={child.assignee_id}
+            assigneeName={child.assignee_name}
+            assigneeAvatarUrl={child.assignee_avatar_url}
             onUpdate={handleUpdate}
             align="end"
             trigger={
@@ -885,6 +887,8 @@ function SubIssueRow({
                 <ActorAvatar
                   actorType={child.assignee_type}
                   actorId={child.assignee_id}
+                  name={child.assignee_name ?? undefined}
+                  avatarUrl={child.assignee_avatar_url ?? undefined}
                   size="sm"
                   className="shrink-0"
                 />
@@ -2318,7 +2322,14 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             <StatusPicker status={issue.status} onUpdate={handleUpdateField} align="start" />
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_assignee)}>
-            <AssigneePicker assigneeType={issue.assignee_type} assigneeId={issue.assignee_id} onUpdate={handleUpdateField} align="start" />
+            <AssigneePicker
+            assigneeType={issue.assignee_type}
+            assigneeId={issue.assignee_id}
+            assigneeName={issue.assignee_name}
+            assigneeAvatarUrl={issue.assignee_avatar_url}
+            onUpdate={handleUpdateField}
+            align="start"
+          />
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_project)}>
             <ProjectPicker

@@ -185,6 +185,14 @@ export interface Issue {
   priority: IssuePriority;
   assignee_type: IssueAssigneeType | null;
   assignee_id: string | null;
+  /**
+   * Server-resolved assignee display. Present only when the caller may
+   * enumerate the assignee — notably a collaborator from another Workspace
+   * whose display name is not in this Workspace's member list. Absent
+   * otherwise, so renderers fall back to the local directory resolver.
+   */
+  assignee_name?: string | null;
+  assignee_avatar_url?: string | null;
   creator_type: IssueAssigneeType;
   creator_id: string;
   parent_issue_id: string | null;

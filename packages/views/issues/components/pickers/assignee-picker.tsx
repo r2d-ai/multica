@@ -44,6 +44,13 @@ interface AssigneePickerProps {
   assigneeType: IssueAssigneeType | null;
   assigneeId: string | null;
   /**
+   * Server-resolved display for the current assignee. Passed by surfaces that
+   * hold the Issue payload so a collaborator from another Workspace renders by
+   * name instead of the local directory's "Unknown".
+   */
+  assigneeName?: string | null;
+  assigneeAvatarUrl?: string | null;
+  /**
    * `true` when a batch selection spans different assignees ("mixed"): no row
    * is checked, including the unassigned row. Distinct from `assigneeType` /
    * `assigneeId` both being `null`, which means every selected issue is
@@ -92,6 +99,8 @@ export function AssigneePicker(props: AssigneePickerProps) {
 function AssigneePickerImpl({
   assigneeType,
   assigneeId,
+  assigneeName,
+  assigneeAvatarUrl,
   mixed = false,
   onUpdate,
   trigger: customTrigger,
@@ -148,7 +157,7 @@ function AssigneePickerImpl({
 
   const triggerLabel =
     assigneeType && assigneeId
-      ? getActorName(assigneeType, assigneeId)
+      ? assigneeName ?? getActorName(assigneeType, assigneeId)
       : t(($) => $.pickers.assignee.trigger_unassigned);
 
   return (
@@ -167,7 +176,15 @@ function AssigneePickerImpl({
       trigger={
         customTrigger ? customTrigger : assigneeType && assigneeId ? (
           <>
-            <ActorAvatar actorType={assigneeType} actorId={assigneeId} size="sm" enableHoverCard showStatusDot />
+            <ActorAvatar
+              actorType={assigneeType}
+              actorId={assigneeId}
+              name={assigneeName ?? undefined}
+              avatarUrl={assigneeAvatarUrl ?? undefined}
+              size="sm"
+              enableHoverCard
+              showStatusDot
+            />
             <span className="truncate">{triggerLabel}</span>
           </>
         ) : (

@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import { childIssueProgressOptions, issueDetailOptions } from "@multica/core/issues/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { issueAssigneeDisplay } from "./../utils/assignee-display";
 import {
   HoverCard,
   HoverCardTrigger,
@@ -86,11 +87,24 @@ export function IssueHoverCard({
 function IssueHoverCardAssignee({
   actorType,
   actorId,
+  assigneeName,
+  assigneeAvatarUrl,
 }: {
   actorType: string;
   actorId: string;
+  assigneeName?: string | null;
+  assigneeAvatarUrl?: string | null;
 }) {
   const { getActorName } = useActorName();
+  const display = issueAssigneeDisplay(
+    {
+      assignee_type: actorType,
+      assignee_id: actorId,
+      assignee_name: assigneeName,
+      assignee_avatar_url: assigneeAvatarUrl,
+    },
+    getActorName,
+  );
   return (
     <span className="flex min-w-0 items-center gap-1.5">
       {/* This is already a hover card, and the agent live-peek variant would
@@ -98,13 +112,15 @@ function IssueHoverCardAssignee({
       <ActorAvatar
         actorType={actorType}
         actorId={actorId}
+        name={display.name || undefined}
+        avatarUrl={display.avatarUrl ?? undefined}
         size="sm"
         enableHoverCard={false}
         profileLink={false}
         className="shrink-0"
       />
       <span className="min-w-0 truncate text-caption text-foreground">
-        {getActorName(actorType, actorId)}
+        {display.name}
       </span>
     </span>
   );
@@ -211,7 +227,12 @@ function IssueHoverCardBody({
       {(hasAssignee || hasProgress) && (
         <div className="mt-1 flex items-center justify-between gap-3">
           {hasAssignee ? (
-            <IssueHoverCardAssignee actorType={assigneeType} actorId={assigneeId} />
+            <IssueHoverCardAssignee
+              actorType={assigneeType}
+              actorId={assigneeId}
+              assigneeName={issue.assignee_name}
+              assigneeAvatarUrl={issue.assignee_avatar_url}
+            />
           ) : (
             <span />
           )}

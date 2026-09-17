@@ -25,6 +25,8 @@ import { LabelChip } from "../../labels/label-chip";
 import { CustomStatusChip } from "./custom-status-chip";
 import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
 import { useIssueSurfaceSelection } from "../surface/selection-context";
+import { useActorName } from "@multica/core/workspace/hooks";
+import { issueAssigneeDisplay } from "../utils/assignee-display";
 import { useLocale } from "../../i18n";
 
 export interface ChildProgress {
@@ -68,6 +70,8 @@ function ListRowContent({
     .map((id) => workspaceProperties.find((p) => p.id === id))
     .filter((p): p is IssueProperty => !!p && issue.properties?.[p.id] !== undefined);
   const labels = issue.labels ?? [];
+  const { getActorName } = useActorName();
+  const assigneeDisplay = issueAssigneeDisplay(issue, getActorName);
 
   const showProject = storeProperties.project && project;
   const showChildProgress = storeProperties.childProgress && childProgress;
@@ -175,6 +179,8 @@ function ListRowContent({
             <ActorAvatar
               actorType={issue.assignee_type!}
               actorId={issue.assignee_id!}
+              name={assigneeDisplay.name || undefined}
+              avatarUrl={assigneeDisplay.avatarUrl ?? undefined}
               size="sm"
               enableHoverCard
             />

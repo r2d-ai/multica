@@ -36,6 +36,7 @@ import { useViewStore, useViewStoreApi } from "@multica/core/issues/stores/view-
 import { useViewBaseline } from "../surface/view-baseline-context";
 import { filterIssues, type IssueFilters } from "../utils/filter";
 import { getMoveAnchors } from "../utils/drag-utils";
+import { issueAssigneeDisplay } from "../utils/assignee-display";
 import type { SwimlaneGrouping } from "@multica/core/issues/stores/view-store";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -425,7 +426,7 @@ function buildAssigneeLanes(
       rawId,
       isPinned: false,
       isOrphan: false,
-      title: getActorName(assigneeType, assigneeId),
+      title: issueAssigneeDisplay(issue, getActorName).name,
       identifier: "",
       parentIssue: null,
       project: null,
