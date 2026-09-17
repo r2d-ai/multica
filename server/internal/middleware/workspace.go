@@ -16,6 +16,7 @@ type contextKey int
 const (
 	ctxKeyWorkspaceID contextKey = iota
 	ctxKeyMember
+	ctxKeyR2DProjectACL
 )
 
 // MemberFromContext returns the workspace member injected by the workspace middleware.
@@ -37,6 +38,23 @@ func SetMemberContext(ctx context.Context, workspaceID string, member db.Member)
 	ctx = context.WithValue(ctx, ctxKeyWorkspaceID, workspaceID)
 	ctx = context.WithValue(ctx, ctxKeyMember, member)
 	return ctx
+}
+
+// R2DProjectACLFromContext reports whether the request was authorized through
+// the R2D Project ACL path rather than ordinary Workspace membership. A handler
+// that finds this set may proceed without a Workspace member row, but must
+// enforce authorship itself — a Project grant never grants moderation
+// authority over another user's content.
+func R2DProjectACLFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(ctxKeyR2DProjectACL).(bool)
+	return v
+}
+
+// SetR2DProjectACL marks the context as authorized through the Project ACL
+// path. The middleware that sets it has already resolved the owning Workspace
+// and the Project operation; the handler must not re-require membership.
+func SetR2DProjectACL(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyR2DProjectACL, true)
 }
 
 // errWorkspaceNotFound is returned when a slug was provided but doesn't match
@@ -252,6 +270,12 @@ func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []str
 				// Attachment by-id is Workspace-scoped upstream; a foreign
 				// Project collaborator reaches it through the Project ACL.
 				if tryR2DAttachmentScope(queries, w, r, next, userID) {
+					return
+				}
+				// Comment PUT/DELETE by-id is also Workspace-scoped upstream; a
+				// foreign Project collaborator needs the Project ACL to mutate
+				// their own comments on shared Issues.
+				if tryR2DCommentScope(queries, w, r, next, userID) {
 					return
 				}
 			}
