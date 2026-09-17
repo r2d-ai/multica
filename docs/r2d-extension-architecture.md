@@ -283,3 +283,12 @@ replaces the former "must be a Workspace member" rule. Projectless Issues keep
 the Workspace boundary. Project-grant notification reads stay grant-aware
 through `r2dInboxVisibleFor`, which re-checks the current Project ACL on every
 read and mutation.
+
+## Issue collection visibility
+
+Workspace-scoped issue reads union the Projects an issue collection may show:
+Projects owned by the active Workspace, foreign Projects the user holds an
+explicit user/workspace grant on, and a global observer's readable set. The rule
+is `r2dauth.ProjectIDsForIssueCollection` and is shared with the Project list so
+Projects and Issues cannot drift. Projectless issues stay Workspace-private, and
+write/batch paths keep the Workspace-owned readable set.

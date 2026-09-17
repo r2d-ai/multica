@@ -14,25 +14,20 @@ import (
 
 const r2dNoProjectUUID = "00000000-0000-0000-0000-000000000000"
 
-// r2dReadableWorkspaceProjectIDs returns only Projects owned by workspaceID that
-// the caller may read. SQL supplies facts; r2dauth.Resolve remains the policy
-// source of truth. The result is sorted to keep rewritten requests stable.
-func r2dReadableWorkspaceProjectIDs(queries *db.Queries, r *http.Request, userID, workspaceID string) ([]string, error) {
-	facts, err := queries.R2DListWorkspaceProjectAccessFacts(r.Context(), userID, workspaceID)
+// r2dReadableIssueProjectIDs returns the readable Projects an issue collection
+// unions while activeWorkspaceID is active: Workspace-owned Projects, foreign
+// Projects with an explicit grant, and a global observer's readable set. SQL
+// supplies facts only; r2dauth.ProjectIDsForIssueCollection is the policy.
+func r2dReadableIssueProjectIDs(queries *db.Queries, r *http.Request, userID, activeWorkspaceID string) ([]string, error) {
+	facts, err := queries.R2DListCandidateProjectAccessFacts(r.Context(), userID)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(facts))
+	policyFacts := make([]r2dauth.ProjectFacts, 0, len(facts))
 	for _, fact := range facts {
-		if fact.OwnerWorkspaceID != workspaceID || fact.ProjectID == "" {
-			continue
-		}
-		if r2dauth.Resolve(r2dFacts(fact)).Can(r2dauth.OperationRead) {
-			ids = append(ids, fact.ProjectID)
-		}
+		policyFacts = append(policyFacts, r2dFacts(fact))
 	}
-	sort.Strings(ids)
-	return ids, nil
+	return r2dauth.ProjectIDsForIssueCollection(policyFacts, activeWorkspaceID), nil
 }
 
 func r2dIntersectProjectIDs(raw string, readable []string) []string {
@@ -106,7 +101,7 @@ func r2dApplyIssueCollectionVisibility(queries *db.Queries, r *http.Request, use
 	if !r2dIssueCollectionNeedsVisibility(r) {
 		return nil
 	}
-	readable, err := r2dReadableWorkspaceProjectIDs(queries, r, userID, workspaceID)
+	readable, err := r2dReadableIssueProjectIDs(queries, r, userID, workspaceID)
 	if err != nil {
 		return err
 	}

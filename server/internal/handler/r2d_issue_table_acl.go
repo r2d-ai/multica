@@ -53,6 +53,31 @@ func (h *Handler) r2dReadableWorkspaceProjectIDs(ctx context.Context, userID, wo
 	return ids, nil
 }
 
+// r2dReadableIssueProjectIDs is the read-side readable-Project set for Issue
+// collections. It includes Projects outside the active Workspace when the user
+// holds an explicit grant, matching the Project list. Write paths keep using
+// r2dReadableWorkspaceProjectIDs: widening a read set must never widen a write
+// gate.
+func (h *Handler) r2dReadableIssueProjectIDs(ctx context.Context, userID, workspaceID string) ([]pgtype.UUID, error) {
+	facts, err := h.Queries.R2DListCandidateProjectAccessFacts(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	policyFacts := make([]r2dauth.ProjectFacts, 0, len(facts))
+	for _, fact := range facts {
+		policyFacts = append(policyFacts, r2dHandlerProjectFacts(fact))
+	}
+	ids := make([]pgtype.UUID, 0, len(policyFacts))
+	for _, id := range r2dauth.ProjectIDsForIssueCollection(policyFacts, workspaceID) {
+		parsed, err := util.ParseUUID(id)
+		if err != nil {
+			return nil, fmt.Errorf("invalid readable project id %q: %w", id, err)
+		}
+		ids = append(ids, parsed)
+	}
+	return ids, nil
+}
+
 func r2dProjectUUIDSet(ids []pgtype.UUID) map[string]struct{} {
 	set := make(map[string]struct{}, len(ids))
 	for _, id := range ids {

@@ -190,7 +190,7 @@ func r2dServeWorkspaceSearch(queries *db.Queries, w http.ResponseWriter, r *http
 	if !isMember {
 		return false
 	}
-	readableProjectIDs, err := r2dReadableWorkspaceProjectIDs(queries, r, userID, workspaceID)
+	readableProjectIDs, err := r2dReadableIssueProjectIDs(queries, r, userID, workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to apply project visibility")
 		return true
