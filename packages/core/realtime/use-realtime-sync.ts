@@ -564,6 +564,15 @@ export async function handleInboxNew(
 ): Promise<void> {
   const sourceWsId = item.workspace_id;
   if (sourceWsId) void onInboxNew(qc, sourceWsId, item);
+  // The inbox LIST is recipient-scoped server-side, so a Project-grant row
+  // written under the issue OWNER's Workspace is served through the ACTIVE
+  // Workspace's list cache. Invalidating only the item's Workspace refreshes a
+  // cache entry this client never reads, leaving the item invisible until a
+  // full reload.
+  const activeWsId = getCurrentWsId();
+  if (activeWsId && activeWsId !== sourceWsId) {
+    void onInboxInvalidate(qc, activeWsId);
+  }
   // A new item in ANY workspace can light the workspace-switcher dot, so
   // refresh the cross-workspace summary regardless of the active workspace.
   void onInboxSummaryInvalidate(qc);
