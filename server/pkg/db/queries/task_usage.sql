@@ -144,7 +144,13 @@ SELECT
 FROM task_usage_hourly
 WHERE workspace_id = $1
   AND bucket_hour >= sqlc.arg('since')::timestamptz
-  AND (sqlc.narg('project_id')::uuid IS NULL OR project_id = sqlc.narg('project_id'))
+  AND (
+        sqlc.narg('project_id')::uuid = project_id
+        OR (
+            sqlc.narg('project_id')::uuid IS NULL
+            AND (project_id IS NULL OR project_id = ANY(COALESCE(sqlc.narg('visible_project_ids')::uuid[], '{}')))
+        )
+      )
 GROUP BY DATE(bucket_hour AT TIME ZONE sqlc.arg('tz')::text), LOWER(provider), model
 ORDER BY DATE(bucket_hour AT TIME ZONE sqlc.arg('tz')::text) DESC, LOWER(provider), model;
 
@@ -180,7 +186,13 @@ SELECT
 FROM task_usage_hourly
 WHERE workspace_id = $1
   AND bucket_hour >= @since::timestamptz
-  AND (sqlc.narg('project_id')::uuid IS NULL OR project_id = sqlc.narg('project_id'))
+  AND (
+        sqlc.narg('project_id')::uuid = project_id
+        OR (
+            sqlc.narg('project_id')::uuid IS NULL
+            AND (project_id IS NULL OR project_id = ANY(COALESCE(sqlc.narg('visible_project_ids')::uuid[], '{}')))
+        )
+      )
 GROUP BY agent_id, LOWER(provider), model
 ORDER BY agent_id, LOWER(provider), model;
 
@@ -222,7 +234,13 @@ WHERE a.workspace_id = $1
   AND atq.started_at IS NOT NULL
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= sqlc.arg('since')::timestamptz
-  AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (
+        sqlc.narg('project_id')::uuid = i.project_id
+        OR (
+            sqlc.narg('project_id')::uuid IS NULL
+            AND (i.project_id IS NULL OR i.project_id = ANY(COALESCE(sqlc.narg('visible_project_ids')::uuid[], '{}')))
+        )
+      )
 GROUP BY DATE(atq.completed_at AT TIME ZONE sqlc.arg('tz')::text)
 ORDER BY DATE(atq.completed_at AT TIME ZONE sqlc.arg('tz')::text) DESC;
 
@@ -263,7 +281,13 @@ WHERE a.workspace_id = $1
   AND atq.started_at IS NOT NULL
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= @since::timestamptz
-  AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (
+        sqlc.narg('project_id')::uuid = i.project_id
+        OR (
+            sqlc.narg('project_id')::uuid IS NULL
+            AND (i.project_id IS NULL OR i.project_id = ANY(COALESCE(sqlc.narg('visible_project_ids')::uuid[], '{}')))
+        )
+      )
 GROUP BY atq.agent_id
 ORDER BY total_seconds DESC;
 
@@ -304,7 +328,13 @@ WHERE a.workspace_id = $1
   AND atq.status IN ('completed', 'failed')
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= sqlc.arg('since')::timestamptz
-  AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (
+        sqlc.narg('project_id')::uuid = i.project_id
+        OR (
+            sqlc.narg('project_id')::uuid IS NULL
+            AND (i.project_id IS NULL OR i.project_id = ANY(COALESCE(sqlc.narg('visible_project_ids')::uuid[], '{}')))
+        )
+      )
 GROUP BY 1, 2
 ORDER BY 1 DESC, 2;
 
@@ -331,6 +361,12 @@ WHERE a.workspace_id = $1
   AND atq.status IN ('completed', 'failed')
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= @since::timestamptz
-  AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (
+        sqlc.narg('project_id')::uuid = i.project_id
+        OR (
+            sqlc.narg('project_id')::uuid IS NULL
+            AND (i.project_id IS NULL OR i.project_id = ANY(COALESCE(sqlc.narg('visible_project_ids')::uuid[], '{}')))
+        )
+      )
 GROUP BY atq.agent_id, 2
 ORDER BY atq.agent_id, 2;
