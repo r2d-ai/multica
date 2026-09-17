@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { FolderOpen, GitBranch } from "lucide-react";
 import { projectResourcesOptions } from "@multica/core/projects";
+import { projectCapabilitiesOptions } from "@multica/core/projects/r2d-capabilities";
 import type { LocalDirectoryResourceRef, ProjectResource } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useLocalDaemonStatus } from "../../platform";
@@ -37,9 +38,18 @@ export function LocalDirectoryHint({
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
   const daemon = useLocalDaemonStatus();
+  const { data: capabilities } = useQuery(projectCapabilitiesOptions(projectId));
   const { data: resources = [] } = useQuery({
     ...projectResourcesOptions(wsId, projectId ?? ""),
-    enabled: Boolean(projectId),
+    // Two gates, both required. The hint is meaningful only on the machine
+    // running the local daemon, and Project resources are owner-Workspace-only
+    // (they carry repo URLs, daemon ids and local paths). Without them every
+    // web issue view — and every collaborator whose Workspace is not the
+    // Project owner's — fired a request the server answers 404 by design.
+    enabled:
+      Boolean(projectId) &&
+      Boolean(daemon.daemonId) &&
+      capabilities?.view_resources === true,
   });
 
   if (!projectId) return null;

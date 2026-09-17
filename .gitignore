@@ -79,3 +79,4 @@ data/
 __pycache__/
 *.pyc
 perf-report/
+.zvec-grep/
