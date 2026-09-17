@@ -106,8 +106,9 @@ func inboxListBody(notifType string, issueID pgtype.UUID, body pgtype.Text) *str
 	return full
 }
 
-// inboxRowToResponse maps a LIST row — the main inbox and, through
-// archivedInboxRowToResponse, the archived view. Single-item responses go
+// inboxRowToResponse maps a LIST row. Both the main inbox and the archived view
+// read through r2d_notification_ext's R2DInboxItemRow, which embeds exactly
+// this column shape, so one mapper serves both. Single-item responses go
 // through inboxToResponse and keep the full body.
 func inboxRowToResponse(r db.ListInboxItemsRow) InboxItemResponse {
 	return InboxItemResponse{
@@ -131,14 +132,6 @@ func inboxRowToResponse(r db.ListInboxItemsRow) InboxItemResponse {
 	}
 }
 
-// ListArchivedInboxItemsRow carries the same columns as ListInboxItemsRow (both
-// queries select `inbox_item.*` plus the joined issue projections), so the archived
-// row converts to the active one and reuses its mapper. If either query's
-// column list drifts, this conversion stops compiling — which is the point.
-func archivedInboxRowToResponse(r db.ListArchivedInboxItemsRow) InboxItemResponse {
-	return inboxRowToResponse(db.ListInboxItemsRow(r))
-}
-
 func (h *Handler) enrichInboxResponse(ctx context.Context, resp InboxItemResponse, issueID pgtype.UUID) InboxItemResponse {
 	if !issueID.Valid {
 		return resp
@@ -159,24 +152,30 @@ func (h *Handler) ListInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
+	if _, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id"); !ok {
 		return
 	}
 
-	items, err := h.Queries.ListInboxItems(r.Context(), db.ListInboxItemsParams{
-		WorkspaceID:   wsUUID,
-		RecipientType: "member",
-		RecipientID:   parseUUID(userID),
-	})
+	// Recipient-scoped, not Workspace-scoped: Project-grant rows live under the
+	// issue owner's Workspace, so a foreign collaborator would otherwise never
+	// see them. Visibility is applied below from the CURRENT Project ACL.
+	rows, err := h.Queries.R2DListInboxItemsForRecipient(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list inbox")
+		return
+	}
+	facts, err := h.r2dInboxProjectFacts(r.Context(), userID, r2dInboxProjectIDs(rows))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list inbox")
 		return
 	}
 
-	resp := make([]InboxItemResponse, len(items))
-	for i, item := range items {
-		resp[i] = inboxRowToResponse(item)
+	resp := make([]InboxItemResponse, 0, len(rows))
+	for _, row := range rows {
+		if !r2dInboxRowVisible(row, workspaceID, facts) {
+			continue
+		}
+		resp = append(resp, inboxRowToResponse(row.ListInboxItemsRow))
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -197,24 +196,27 @@ func (h *Handler) ListArchivedInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
+	if _, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id"); !ok {
 		return
 	}
 
-	items, err := h.Queries.ListArchivedInboxItems(r.Context(), db.ListArchivedInboxItemsParams{
-		WorkspaceID:   wsUUID,
-		RecipientType: "member",
-		RecipientID:   parseUUID(userID),
-	})
+	rows, err := h.Queries.R2DListArchivedInboxItemsForRecipient(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list archived inbox")
+		return
+	}
+	facts, err := h.r2dInboxProjectFacts(r.Context(), userID, r2dInboxProjectIDs(rows))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list archived inbox")
 		return
 	}
 
-	resp := make([]InboxItemResponse, len(items))
-	for i, item := range items {
-		resp[i] = archivedInboxRowToResponse(item)
+	resp := make([]InboxItemResponse, 0, len(rows))
+	for _, row := range rows {
+		if !r2dInboxRowVisible(row, workspaceID, facts) {
+			continue
+		}
+		resp = append(resp, inboxRowToResponse(row.ListInboxItemsRow))
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -354,19 +356,29 @@ func (h *Handler) CountUnreadInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
+	if _, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id"); !ok {
 		return
 	}
 
-	count, err := h.Queries.CountUnreadInbox(r.Context(), db.CountUnreadInboxParams{
-		WorkspaceID:   wsUUID,
-		RecipientType: "member",
-		RecipientID:   parseUUID(userID),
-	})
+	// Count the same visible set the list returns: native rows plus readable
+	// foreign Project rows. Inaccessible Project rows are dropped before the
+	// count, so the number cannot reveal notifications the user cannot read.
+	rows, err := h.Queries.R2DListUnreadInboxRowsForRecipient(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to count unread inbox")
 		return
+	}
+	facts, err := h.r2dInboxProjectFacts(r.Context(), userID, r2dInboxUnreadProjectIDs(rows))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to count unread inbox")
+		return
+	}
+
+	var count int64
+	for _, row := range rows {
+		if r2dInboxUnreadRowVisible(row, workspaceID, facts) {
+			count++
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]int64{"count": count})
@@ -391,7 +403,15 @@ func (h *Handler) UnreadInboxSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.Queries.CountUnreadInboxByWorkspace(r.Context(), parseUUID(userID))
+	// The dedup runs in SQL, so the ACL filter is the complete readable Project
+	// set. An empty set is fail-closed: only projectless rows survive.
+	readableProjectIDs, err := h.r2dReadableProjectIDsAllWorkspaces(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to summarize unread inbox")
+		return
+	}
+
+	rows, err := h.Queries.R2DListUnreadInboxSummaryRows(r.Context(), userID, readableProjectIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to summarize unread inbox")
 		return
@@ -400,7 +420,7 @@ func (h *Handler) UnreadInboxSummary(w http.ResponseWriter, r *http.Request) {
 	resp := make([]InboxWorkspaceUnreadResponse, len(rows))
 	for i, row := range rows {
 		resp[i] = InboxWorkspaceUnreadResponse{
-			WorkspaceID: uuidToString(row.WorkspaceID),
+			WorkspaceID: row.WorkspaceID,
 			Count:       row.Count,
 		}
 	}
@@ -414,15 +434,15 @@ func (h *Handler) MarkAllInboxRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if _, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id"); !ok {
+		return
+	}
+	readableProjectIDs, ok := h.r2dInboxBatchReadableProjects(w, r, userID, workspaceID)
 	if !ok {
 		return
 	}
 
-	count, err := h.Queries.MarkAllInboxRead(r.Context(), db.MarkAllInboxReadParams{
-		WorkspaceID: wsUUID,
-		RecipientID: parseUUID(userID),
-	})
+	count, err := h.Queries.R2DMarkAllInboxReadVisible(r.Context(), workspaceID, userID, readableProjectIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mark all inbox read")
 		return
@@ -443,15 +463,15 @@ func (h *Handler) ArchiveAllInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if _, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id"); !ok {
+		return
+	}
+	readableProjectIDs, ok := h.r2dInboxBatchReadableProjects(w, r, userID, workspaceID)
 	if !ok {
 		return
 	}
 
-	count, err := h.Queries.ArchiveAllInbox(r.Context(), db.ArchiveAllInboxParams{
-		WorkspaceID: wsUUID,
-		RecipientID: parseUUID(userID),
-	})
+	count, err := h.Queries.R2DArchiveAllInboxVisible(r.Context(), workspaceID, userID, readableProjectIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to archive all inbox")
 		return
@@ -472,15 +492,15 @@ func (h *Handler) ArchiveAllReadInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if _, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id"); !ok {
+		return
+	}
+	readableProjectIDs, ok := h.r2dInboxBatchReadableProjects(w, r, userID, workspaceID)
 	if !ok {
 		return
 	}
 
-	count, err := h.Queries.ArchiveAllReadInbox(r.Context(), db.ArchiveAllReadInboxParams{
-		WorkspaceID: wsUUID,
-		RecipientID: parseUUID(userID),
-	})
+	count, err := h.Queries.R2DArchiveAllReadInboxVisible(r.Context(), workspaceID, userID, readableProjectIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to archive all read inbox")
 		return
@@ -505,17 +525,17 @@ func (h *Handler) ArchiveCompletedInbox(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	readableProjectIDs, ok := h.r2dInboxBatchReadableProjects(w, r, userID, workspaceID)
+	if !ok {
+		return
+	}
 
 	terminalStatusKeys, err := h.terminalIssueStatusKeys(r.Context(), wsUUID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to resolve status categories")
 		return
 	}
-	count, err := h.Queries.ArchiveCompletedInbox(r.Context(), db.ArchiveCompletedInboxParams{
-		WorkspaceID:        wsUUID,
-		RecipientID:        parseUUID(userID),
-		TerminalStatusKeys: terminalStatusKeys,
-	})
+	count, err := h.Queries.R2DArchiveCompletedInboxVisible(r.Context(), workspaceID, userID, terminalStatusKeys, readableProjectIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to archive completed inbox")
 		return
