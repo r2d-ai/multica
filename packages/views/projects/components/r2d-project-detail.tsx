@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Share2 } from "lucide-react";
 import { projectCapabilitiesOptions } from "@multica/core/projects/r2d-capabilities";
 import { projectSharingOptions } from "@multica/core/projects/r2d-sharing";
+import { useProjectRealtimeScope } from "@multica/core/realtime";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { ProjectDetail as UpstreamProjectDetail } from "./project-detail";
@@ -13,6 +14,12 @@ import { R2DSafeProjectDetail } from "./r2d-safe-project-detail";
 import { r2dProjectDetailMode } from "./r2d-project-ui-policy";
 
 export function R2DProjectDetail({ projectId }: { projectId: string }) {
+  // Join the Project realtime room for as long as this surface is mounted so
+  // Project-scoped issue / comment events reach a collaborator whose home
+  // Workspace is not the Project owner's. Mounted before the read gate on
+  // purpose: an unauthorized viewer must still attempt the join so the server
+  // can answer with `subscribe_error` rather than silently receive nothing.
+  useProjectRealtimeScope(projectId);
   const [sharingOpen, setSharingOpen] = useState(false);
   const capabilities = useQuery(projectCapabilitiesOptions(projectId));
   const sharing = useQuery({

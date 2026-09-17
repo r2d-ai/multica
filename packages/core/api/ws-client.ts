@@ -1,7 +1,25 @@
-import type { WSMessage, WSEventType } from "../types/events";
+import type {
+  WSMessage,
+  WSEventType,
+  WSSubscriptionScope,
+  WSSubscriptionResult,
+} from "../types/events";
 import { type Logger, noopLogger } from "../logger";
 
 type EventHandler = (payload: unknown, actorId?: string, actorType?: string) => void;
+type SubscriptionResultHandler = (result: WSSubscriptionResult) => void;
+
+/** Desired scope subscription, ref-counted across local subscribers. */
+interface ScopeSubscription {
+  scope: WSSubscriptionScope;
+  id: string;
+  refs: number;
+}
+
+/** Key used to deduplicate desired subscriptions of the same scope + id. */
+function scopeSubscriptionKey(scope: string, id: string): string {
+  return `${scope}:${id}`;
+}
 
 // Cap how much of an unparseable frame we put into the log. A malformed or
 // rogue server can stream arbitrarily large garbage, and the warn handler may
@@ -49,6 +67,18 @@ export class WSClient {
   private badFrameLogged = false;
   private onReconnectCallbacks = new Set<() => void>();
   private anyHandlers = new Set<(msg: WSMessage) => void>();
+  // Explicit scope subscriptions (task / chat / project). Desired state is
+  // kept here — not on the server — so a reconnect can replay it: a new socket
+  // starts with only the auto-joined workspace/user rooms, and every explicit
+  // room must be re-joined. Ref-counted so two mounted surfaces that need the
+  // same Project room send one frame and unsubscribe only when both leave.
+  private subscriptions = new Map<string, ScopeSubscription>();
+  private subscriptionResultHandlers = new Set<SubscriptionResultHandler>();
+  // True once the connection is authenticated (cookie mode: on open; token
+  // mode: on auth_ack). Subscribe frames are withheld until then — the server
+  // gates them on the connection identity, which is only established after the
+  // auth exchange.
+  private authenticated = false;
   private logger: Logger;
 
   constructor(
@@ -72,6 +102,7 @@ export class WSClient {
 
   connect() {
     this.badFrameLogged = false;
+    this.authenticated = false;
     const url = new URL(this.baseUrl);
     // Token is never sent as a URL query parameter — it would be logged by
     // proxies, CDNs, and browser history.  In cookie mode the HttpOnly cookie
@@ -133,6 +164,17 @@ export class WSClient {
         this.onAuthenticated();
         return;
       }
+      // Subscription control frames are transport-level, not business events;
+      // intercept them before the generic event dispatch so they never reach
+      // `onAny` / prefix invalidation handlers.
+      const frameType = (msg as { type: string }).type;
+      if (frameType === "subscribe_ack" || frameType === "subscribe_error") {
+        this.handleSubscriptionResult(
+          frameType === "subscribe_ack",
+          (msg as { payload?: unknown }).payload,
+        );
+        return;
+      }
       this.logger.debug("received", msg.type);
       const eventHandlers = this.handlers.get(msg.type);
       if (eventHandlers) {
@@ -146,6 +188,7 @@ export class WSClient {
     };
 
     this.ws.onclose = () => {
+      this.authenticated = false;
       this.scheduleReconnect();
     };
 
@@ -181,6 +224,7 @@ export class WSClient {
 
   private onAuthenticated() {
     this.logger.info("connected");
+    this.authenticated = true;
     const recoveredConnection = this.hasConnectedBefore || this.reconnectAttempt > 0;
     this.reconnectAttempt = 0;
     if (recoveredConnection) {
@@ -193,6 +237,102 @@ export class WSClient {
       }
     }
     this.hasConnectedBefore = true;
+    // A fresh socket only has the auto-joined workspace/user rooms; replay
+    // every desired scope so task / chat / project rooms are rejoined after a
+    // reconnect. The server re-runs the ACL check per join and answers a fresh
+    // ack / error, so a revoked grant is never silently re-admitted.
+    this.replaySubscriptions();
+  }
+
+  /** Re-send a `subscribe` frame for every locally desired scope. Safe to
+   *  call when nothing is subscribed (no-op). */
+  private replaySubscriptions() {
+    for (const { scope, id } of this.subscriptions.values()) {
+      this.sendScopeFrame("subscribe", scope, id);
+    }
+  }
+
+  /** Send a subscribe / unsubscribe frame if the socket is open and the
+   *  connection has completed its auth exchange. */
+  private sendScopeFrame(
+    kind: "subscribe" | "unsubscribe",
+    scope: WSSubscriptionScope,
+    id: string,
+  ) {
+    if (!this.authenticated) return;
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: kind, payload: { scope, id } }));
+  }
+
+  private handleSubscriptionResult(ok: boolean, payload: unknown) {
+    const raw = (payload ?? {}) as {
+      scope?: unknown;
+      id?: unknown;
+      error?: unknown;
+    };
+    const scope = typeof raw.scope === "string" ? raw.scope : "";
+    const id = typeof raw.id === "string" ? raw.id : "";
+    const error = typeof raw.error === "string" ? raw.error : undefined;
+    if (ok) {
+      this.logger.debug(`ws: subscribed ${scope}:${id}`);
+    } else {
+      this.logger.warn(`ws: subscribe ${scope}:${id} rejected`, error ?? "unknown");
+    }
+    const result: WSSubscriptionResult = {
+      scope,
+      id,
+      ok,
+      ...(error ? { error } : {}),
+    };
+    for (const handler of this.subscriptionResultHandlers) {
+      try {
+        handler(result);
+      } catch {
+        // ignore subscription result handler errors
+      }
+    }
+  }
+
+  /**
+   * Register local interest in a scope and join its room.
+   *
+   * Ref-counted: repeated calls for the same scope + id join once, and only
+   * the last release sends an `unsubscribe` frame. The desired subscription is
+   * remembered so `connect()` / reconnect replays it. Returns an idempotent
+   * release function.
+   */
+  subscribeScope(scope: WSSubscriptionScope, id: string): () => void {
+    if (!id) return () => {};
+    const key = scopeSubscriptionKey(scope, id);
+    const existing = this.subscriptions.get(key);
+    if (existing) {
+      existing.refs += 1;
+      return () => this.releaseScope(key);
+    }
+    this.subscriptions.set(key, { scope, id, refs: 1 });
+    // No-op until the socket is open and authenticated; `onAuthenticated`
+    // replays the desired set, so subscribing before connect still joins.
+    this.sendScopeFrame("subscribe", scope, id);
+    return () => this.releaseScope(key);
+  }
+
+  private releaseScope(key: string) {
+    const entry = this.subscriptions.get(key);
+    if (!entry) return;
+    entry.refs -= 1;
+    if (entry.refs > 0) return;
+    this.subscriptions.delete(key);
+    this.sendScopeFrame("unsubscribe", entry.scope, entry.id);
+  }
+
+  /** Observe the outcome of every explicit subscribe frame. Returns an
+   *  unsubscribe function. Used by tests and for surfacing denials. */
+  onSubscriptionResult(handler: SubscriptionResultHandler) {
+    this.subscriptionResultHandlers.add(handler);
+    return () => {
+      this.subscriptionResultHandlers.delete(handler);
+    };
   }
 
   disconnect() {
@@ -209,9 +349,16 @@ export class WSClient {
     }
     this.hasConnectedBefore = false;
     this.reconnectAttempt = 0;
+    this.authenticated = false;
     this.handlers.clear();
     this.anyHandlers.clear();
     this.onReconnectCallbacks.clear();
+    this.subscriptionResultHandlers.clear();
+    // Explicit teardown (sign-out / workspace switch) drops desired rooms; a
+    // reconnect is handled by `onclose` -> `scheduleReconnect`, which keeps
+    // them for replay. A still-mounted surface re-subscribes through its hook
+    // once the provider builds the replacement client.
+    this.subscriptions.clear();
   }
 
   on(event: WSEventType, handler: EventHandler) {
