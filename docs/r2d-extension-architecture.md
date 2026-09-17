@@ -292,3 +292,15 @@ explicit user/workspace grant on, and a global observer's readable set. The rule
 is `r2dauth.ProjectIDsForIssueCollection` and is shared with the Project list so
 Projects and Issues cannot drift. Projectless issues stay Workspace-private, and
 write/batch paths keep the Workspace-owned readable set.
+
+## Cross-workspace inbox badge and mentions
+
+The sidebar unread badge reads the workspace-scoped `GET /api/inbox/unread-count`,
+whose query is deduped to the newest row per issue, so it matches the
+recipient-scoped Inbox list (which includes Project-grant rows from other
+Workspaces). The account-level `unread-summary` remains only for the
+workspace-switcher dot, which needs the per-workspace breakdown.
+
+The `@`mention list uses the Project's assignable roster when the editor has a
+Project context (the issue comment composer passes the issue's `project_id`),
+and the active Workspace's member list otherwise.
