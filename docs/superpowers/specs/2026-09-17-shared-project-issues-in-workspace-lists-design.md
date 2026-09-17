@@ -42,15 +42,26 @@ Workspace-private.
 - Widening project-scoped reads, entity by-id reads, or any write path.
 - Changing the Workspace-membership gate itself.
 - Adding new UI surfaces.
+- `GET /api/issues`/`POST /api/issues/query` with `open_only=true`. Its upstream
+  query is `ListOpenIssues`, hard-scoped to `WHERE i.workspace_id = $1`
+  (`server/pkg/db/queries/issue.sql:399`), and the P04-C3 response filter can
+  only remove rows, never add foreign ones. No client call site passes
+  `open_only` today (`packages/core/api/client.ts:915` is the only reference),
+  so this stays Workspace-bound; revisit only if a caller adopts it.
 
 ## Design
 
 ### 1. One policy rule
 
 Promote the inclusion rule currently inlined in `r2dProjectCollectionIDs`
-(`r2d_project_scope.go:262-265`) into `r2dauth`, the policy owner:
+(`r2d_project_scope.go:262-265`) into `r2dauth`, the policy owner, as a pure
+function over already-loaded facts:
 
-`ListIssueCollectionProjectIDs(ctx, userID, activeWorkspaceID) ([]string, error)`
+`ProjectIDsForIssueCollection(facts []ProjectFacts, activeWorkspaceID string) []string`
+
+(A pure function rather than a `Store` method: every caller already holds
+`R2DListCandidateProjectAccessFacts` results, so this keeps one policy
+implementation without adding a second DB access path.)
 
 Include a Project when `r2dauth.Resolve(facts).Can(OperationRead)` holds and at
 least one of:
