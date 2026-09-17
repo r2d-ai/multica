@@ -432,3 +432,82 @@ LEFT JOIN issue ci ON ci.id = c.issue_id
 WHERE a.id = $1::uuid`, attachmentID).Scan(&target.WorkspaceID, &target.ProjectID)
 	return target, err
 }
+
+// R2DPrincipal is one assignable person on a Project. ID is a user id for
+// member-type principals, matching issue.assignee_id.
+type R2DPrincipal struct {
+	ID        string
+	Name      string
+	Email     string
+	AvatarURL string
+}
+
+// r2dAssignableMembersSQL is duplicated verbatim in
+// internal/r2dsharing/postgres.go; the two packages cannot share the constant
+// (the store owns a different DB interface, and pkg/db/generated must not
+// import internal/). Keep the texts byte-identical.
+const r2dAssignableMembersSQL = `
+SELECT DISTINCT u.id::text, u.name, COALESCE(u.email, ''), COALESCE(u.avatar_url, '')
+FROM "user" u
+JOIN member m ON m.user_id = u.id
+WHERE m.workspace_id = (SELECT p.workspace_id FROM project p WHERE p.id = $1::uuid)
+   OR m.workspace_id::text IN (
+        SELECT g.principal_id
+        FROM r2d_project_grants g
+        WHERE g.project_id = $1::text
+          AND g.principal_type = 'workspace'
+   )
+   OR u.id::text IN (
+        SELECT g.principal_id
+        FROM r2d_project_grants g
+        WHERE g.project_id = $1::text
+          AND g.principal_type = 'user'
+   )
+ORDER BY u.name`
+
+// R2DListAssignableMembers returns every user who may be assigned on the
+// Project: owner-Workspace members, direct grantees, and members of granted
+// Workspaces. SQL supplies candidates; the caller must already hold
+// OperationContribute on the Project.
+func (q *Queries) R2DListAssignableMembers(ctx context.Context, projectID string) ([]R2DPrincipal, error) {
+	rows, err := q.db.Query(ctx, r2dAssignableMembersSQL, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]R2DPrincipal, 0)
+	for rows.Next() {
+		var p R2DPrincipal
+		if err := rows.Scan(&p.ID, &p.Name, &p.Email, &p.AvatarURL); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// R2DIsAssignableMember is the single-target form used by the write gate so a
+// mutation does not enumerate the whole roster.
+func (q *Queries) R2DIsAssignableMember(ctx context.Context, projectID, userID string) (bool, error) {
+	var allowed bool
+	err := q.db.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM member m
+    WHERE m.user_id = $2::uuid
+      AND (
+            m.workspace_id = (SELECT p.workspace_id FROM project p WHERE p.id = $1::uuid)
+         OR m.workspace_id::text IN (
+                SELECT g.principal_id FROM r2d_project_grants g
+                WHERE g.project_id = $1::text AND g.principal_type = 'workspace'
+            )
+      )
+) OR EXISTS (
+    SELECT 1 FROM r2d_project_grants g
+    WHERE g.project_id = $1::text
+      AND g.principal_type = 'user'
+      AND g.principal_id = $2::text
+)`, projectID, userID).Scan(&allowed)
+	return allowed, err
+}
