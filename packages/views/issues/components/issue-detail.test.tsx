@@ -503,6 +503,7 @@ vi.mock("@multica/core/hooks/use-file-upload", () => ({
 vi.mock("@multica/core/realtime", () => ({
   useWSEvent: vi.fn(),
   useWSReconnect: vi.fn(),
+  useProjectRealtimeScope: vi.fn(),
   useWS: () => ({ subscribe: vi.fn(() => () => {}), onReconnect: vi.fn(() => () => {}) }),
   WSProvider: ({ children }: { children: React.ReactNode }) => children,
   useRealtimeSync: () => {},
@@ -971,6 +972,21 @@ describe("IssueDetail (shared)", () => {
     // from the inline Inbox pane). A bare issue has no ancestor crumbs.
     const leaf = await screen.findByText("TES-1 Implement authentication");
     expect(leaf.closest("a")).toHaveAttribute("href", "/test/issues/issue-1");
+  });
+
+  // Regression: the Project realtime subscription lived only in
+  // IssueDetailRoute, so the Inbox side panel — which renders IssueDetail
+  // directly — never joined the Project room and a foreign collaborator got no
+  // issue/comment updates there.
+  it("joins the issue's Project realtime room", async () => {
+    const realtime = await import("@multica/core/realtime");
+    const scope = vi.mocked(realtime.useProjectRealtimeScope);
+    scope.mockClear();
+    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, project_id: "p-1" });
+
+    renderIssueDetail();
+
+    await waitFor(() => expect(scope).toHaveBeenCalledWith("p-1"));
   });
 
   it("omits the project breadcrumb segment when the issue has no project_id", async () => {

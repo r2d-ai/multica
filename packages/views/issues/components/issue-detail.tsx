@@ -104,6 +104,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useRecentContextStore } from "@multica/core/chat";
 import { useModalStore } from "@multica/core/modals";
 import { issueListOptions, issueDetailOptions, childIssuesOptions, childIssueProgressOptions, issueAttachmentsOptions } from "@multica/core/issues/queries";
+import { useProjectRealtimeScope } from "@multica/core/realtime";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multica/core/labels";
@@ -1379,6 +1380,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       return cached?.description != null ? cached : undefined;
     },
   });
+  // Join the Project's realtime room while this issue is open. Project-scoped
+  // issue/comment events are fanned out to that room in addition to the owner
+  // Workspace broadcast, which is the only path that reaches a collaborator
+  // whose home Workspace is not the Project owner's. The subscription lives
+  // here, not in IssueDetailRoute, because the Inbox renders this component in
+  // a side panel and never goes through that route.
+  useProjectRealtimeScope(issue?.project_id ?? null);
   const descriptionSourceId = `description:${id}`;
   const descriptionAnnotations = useCommentAnnotations({
     draftKey: `new:${id}`,

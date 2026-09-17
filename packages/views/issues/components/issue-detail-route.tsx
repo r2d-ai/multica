@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { useCanonicalIssue } from "@multica/core/issues/canonical-id";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { useProjectRealtimeScope } from "@multica/core/realtime";
 import { useNavigation } from "../../navigation";
 import { IssueDetail, IssueDetailSkeleton, IssueNotFound } from "./issue-detail";
 
@@ -92,12 +91,6 @@ export function IssueDetailRoute({ routeId, onDelete }: IssueDetailRouteProps) {
   const highlight = useCommentHighlightHash();
 
   useCanonicalIssueUrl(routeId, issue?.identifier, highlight.hash, issue?.workspace_id);
-
-  // Join the Project's realtime room while this issue is open. Project-scoped
-  // issue/comment events are fanned out to that room in addition to the owner
-  // Workspace broadcast, which is the only way a collaborator whose home
-  // Workspace is not the owner's receives them on the issue surface.
-  useProjectRealtimeScope(issue?.project_id ?? null);
 
   if (isResolving) return <IssueDetailSkeleton />;
 
