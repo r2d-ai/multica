@@ -855,6 +855,33 @@ describe("handleInboxNew", () => {
     expect(showNotification).not.toHaveBeenCalled();
   });
 
+  // Regression: a Project-grant notification comes from a Workspace the
+  // recipient does not belong to, so its slug cannot be resolved and the banner
+  // used to be emitted with an empty slug — the click was a no-op. The issue
+  // UUID resolves through the Project ACL from any Workspace shell, so the
+  // banner deep-links into the recipient's active Workspace instead.
+  it("deep-links a foreign-workspace issue notification into the active workspace", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [
+      workspace({ id: "ws-b", slug: "workspace-b" }),
+    ]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    const showNotification = stubDesktopAPI();
+    setCurrentWorkspace("workspace-b", "ws-b");
+
+    try {
+      await handleInboxNew(qc, inboxItem({ workspace_id: "ws-a", issue_id: "issue-1" }));
+
+      expect(showNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: "workspace-b", issueKey: "issue-1" }),
+      );
+    } finally {
+      setCurrentWorkspace(null, null);
+    }
+  });
+
   // Regression: a Project-grant notification row lives under the issue OWNER's
   // Workspace, so its `workspace_id` is not the collaborator's active
   // Workspace. The inbox LIST is cached under the active Workspace's key
