@@ -16,6 +16,29 @@ type DB interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
+// r2dAssignableMembersSQL is duplicated verbatim from
+// pkg/db/generated/r2d_acl_ext.go (the middleware copy). The store owns a
+// different DB interface and pkg/db/generated must not import internal/, so the
+// two texts cannot share a constant. Keep them byte-identical.
+const r2dAssignableMembersSQL = `
+SELECT DISTINCT u.id::text, u.name, COALESCE(u.email, ''), COALESCE(u.avatar_url, '')
+FROM "user" u
+JOIN member m ON m.user_id = u.id
+WHERE m.workspace_id = (SELECT p.workspace_id FROM project p WHERE p.id = $1::uuid)
+   OR m.workspace_id::text IN (
+        SELECT g.principal_id
+        FROM r2d_project_grants g
+        WHERE g.project_id = $1::text
+          AND g.principal_type = 'workspace'
+   )
+   OR u.id::text IN (
+        SELECT g.principal_id
+        FROM r2d_project_grants g
+        WHERE g.project_id = $1::text
+          AND g.principal_type = 'user'
+   )
+ORDER BY u.name`
+
 type PostgresStore struct {
 	db DB
 }
@@ -165,6 +188,33 @@ func (s *PostgresStore) DeleteGrant(ctx context.Context, projectID, grantID stri
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// ListAssignableMembers returns the people who may be assigned on the Project:
+// owner-Workspace members, direct grantees, and members of granted Workspaces.
+// Authorization is the caller's responsibility (see Service.AssignableActors).
+func (s *PostgresStore) ListAssignableMembers(ctx context.Context, projectID string) ([]Principal, error) {
+	rows, err := s.db.Query(ctx, r2dAssignableMembersSQL, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Principal, 0)
+	for rows.Next() {
+		var p Principal
+		p.Type = PrincipalUser
+		var email string
+		if err := rows.Scan(&p.ID, &p.Name, &email, &p.AvatarURL); err != nil {
+			return nil, err
+		}
+		p.Secondary = email
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *PostgresStore) SearchPrincipals(ctx context.Context, principalType PrincipalType, query string, limit int) ([]Principal, error) {

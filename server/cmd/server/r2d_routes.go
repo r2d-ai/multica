@@ -12,6 +12,7 @@ import (
 // cross-workspace collaborators before r2dauth can evaluate the project.
 func registerR2DProjectSharingRoutes(r chi.Router, h *handler.Handler) {
 	r.Get("/api/projects/{id}/capabilities", h.GetProjectCapabilities)
+	r.Get("/api/projects/{id}/assignable-actors", h.GetProjectAssignableActors)
 
 	r.Route("/api/projects/{id}/sharing", func(r chi.Router) {
 		r.Get("/", h.GetProjectSharing)

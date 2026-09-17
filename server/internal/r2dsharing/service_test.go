@@ -35,6 +35,8 @@ type fakeStore struct {
 	searchType      PrincipalType
 	searchQuery     string
 	searchLimit     int
+	members         []Principal
+	membersErr      error
 }
 
 func (s *fakeStore) GetVisibility(context.Context, string) (r2dauth.Visibility, error) {
@@ -70,6 +72,48 @@ func (s *fakeStore) SearchPrincipals(_ context.Context, typ PrincipalType, q str
 	s.searchType, s.searchQuery, s.searchLimit = typ, q, limit
 	return s.principals, nil
 }
+func (s *fakeStore) ListAssignableMembers(context.Context, string) ([]Principal, error) {
+	return s.members, s.membersErr
+}
+
+func TestAssignableActorsRequiresContribute(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{}
+	authz := &fakeAuthorizer{allowed: false}
+	svc := NewService(store, authz)
+
+	if _, err := svc.AssignableActors(context.Background(), "u1", "p1", PrincipalUser, "", 20); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("AssignableActors error = %v, want ErrForbidden", err)
+	}
+	if !reflect.DeepEqual(authz.ops, []r2dauth.Operation{r2dauth.OperationContribute}) {
+		t.Fatalf("auth operations = %#v", authz.ops)
+	}
+}
+
+func TestAssignableActorsFiltersAndOmitsAgents(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{members: []Principal{
+		{Type: PrincipalUser, ID: "u1", Name: "Ada Lovelace", Secondary: "ada@example.test"},
+		{Type: PrincipalUser, ID: "u2", Name: "Grace Hopper", Secondary: "grace@example.test"},
+	}}
+	svc := NewService(store, &fakeAuthorizer{allowed: true})
+
+	got, err := svc.AssignableActors(context.Background(), "u9", "p1", PrincipalUser, "ada", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "u1" {
+		t.Fatalf("filtered roster = %#v, want only u1", got)
+	}
+
+	agents, err := svc.AssignableActors(context.Background(), "u9", "p1", PrincipalType("agent"), "", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 0 {
+		t.Fatalf("agent roster = %#v, want empty", agents)
+	}
+}
 
 func TestGetRequiresProjectManager(t *testing.T) {
 	t.Parallel()
@@ -90,7 +134,7 @@ func TestGetReturnsVisibilityAndGrants(t *testing.T) {
 	t.Parallel()
 	store := &fakeStore{
 		visibility: r2dauth.VisibilityPrivate,
-		grants: []Grant{{ID: "g1", ProjectID: "p1", PrincipalType: PrincipalUser, PrincipalID: "u2", Role: "member"}},
+		grants:     []Grant{{ID: "g1", ProjectID: "p1", PrincipalType: PrincipalUser, PrincipalID: "u2", Role: "member"}},
 	}
 	svc := NewService(store, &fakeAuthorizer{allowed: true})
 
