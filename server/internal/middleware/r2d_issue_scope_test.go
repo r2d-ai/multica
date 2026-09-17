@@ -79,3 +79,31 @@ func TestR2DForeignProjectRestrictedFields(t *testing.T) {
 		t.Fatal("null restricted create field should not request workspace inventory")
 	}
 }
+
+func TestR2DAssigneeFieldDecision(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		fields     map[string]json.RawMessage
+		assignable bool
+		wantOK     bool
+	}{
+		{"unrelated field", map[string]json.RawMessage{"title": json.RawMessage(`"x"`)}, false, true},
+		{"assignee null clears", map[string]json.RawMessage{"assignee_type": json.RawMessage(`null`), "assignee_id": json.RawMessage(`null`)}, false, true},
+		{"assignee absent clears", map[string]json.RawMessage{"title": json.RawMessage(`"x"`), "assignee_id": json.RawMessage(`null`)}, false, true},
+		{"member assignee allowed when assignable", map[string]json.RawMessage{"assignee_type": json.RawMessage(`"member"`), "assignee_id": json.RawMessage(`"u1"`)}, true, true},
+		{"member assignee rejected when not assignable", map[string]json.RawMessage{"assignee_type": json.RawMessage(`"member"`), "assignee_id": json.RawMessage(`"u1"`)}, false, false},
+		{"agent assignee always rejected", map[string]json.RawMessage{"assignee_type": json.RawMessage(`"agent"`), "assignee_id": json.RawMessage(`"a1"`)}, true, false},
+		{"squad assignee always rejected", map[string]json.RawMessage{"assignee_type": json.RawMessage(`"squad"`), "assignee_id": json.RawMessage(`"s1"`)}, true, false},
+		{"attachments always rejected", map[string]json.RawMessage{"attachment_ids": json.RawMessage(`["f1"]`)}, true, false},
+		{"labels always rejected", map[string]json.RawMessage{"label_ids": json.RawMessage(`["l1"]`)}, true, false},
+	}
+
+	for _, tt := range tests {
+		got, _ := r2dAssigneeFieldDecision(tt.fields, tt.assignable)
+		if got != tt.wantOK {
+			t.Errorf("%s: allowed=%v want %v", tt.name, got, tt.wantOK)
+		}
+	}
+}
