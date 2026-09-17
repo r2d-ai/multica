@@ -28,7 +28,7 @@ func TestP06AgentAndSquadInventoryIsolation(t *testing.T) {
 			name:  "task execution returns agent and squad identity but no inventory",
 			value: TaskExecutionDecision{},
 			fields: []string{
-				"Allowed", "Reason", "TaskID", "AgentID", "WorkspaceID", "SquadID", "ProjectID", "ProjectWorkspaceID",
+				"Allowed", "Reason", "TaskID", "AgentID", "WorkspaceID", "SquadID", "ProjectID", "ProjectWorkspaceID", "ResourceScope",
 			},
 		},
 	}
