@@ -11,6 +11,7 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions, agentListOptions, squadListOptions, assigneeFrequencyOptions } from "@multica/core/workspace/queries";
 import { projectAssignableActorsOptions } from "@multica/core/projects/r2d-assignable-actors";
+import { projectCapabilitiesOptions } from "@multica/core/projects/r2d-capabilities";
 import { ActorAvatar } from "../../../common/actor-avatar";
 import { DeferredPopup } from "../../../common/deferred-popup";
 import {
@@ -138,6 +139,12 @@ function AssigneePickerImpl({
   // Project; the Workspace list stays the fallback and still owns the caller's
   // own role, which Agent/Squad permission checks depend on.
   const { data: projectActors } = useQuery(projectAssignableActorsOptions(projectId));
+  // Agent/Squad inventory belongs to the Project owner's Workspace.
+  // `view_resources` is the server-owned "human member of that Workspace"
+  // signal, so a foreign collaborator is never offered options the write gate
+  // rejects. A surface with no Project keeps the active Workspace's inventory.
+  const { data: projectCapabilities } = useQuery(projectCapabilitiesOptions(projectId));  const agentInventoryVisible =
+    !projectId || projectCapabilities?.view_resources === true;
   const members = useMemo<AssigneeMemberOption[]>(() => {
     if (!projectId || !projectActors) return workspaceMembers;
     return projectActors.map((actor) => ({
@@ -180,6 +187,8 @@ function AssigneePickerImpl({
       .filter((agent) => !agent.archived_at && isAgentRuntimeBound(agent))
       .map((agent) => agent.id),
   );
+  const visibleAgents = agentInventoryVisible ? filteredAgents : [];
+  const visibleSquads = agentInventoryVisible ? filteredSquads : [];
 
   const isSelected = (type: string, id: string) =>
     assigneeType === type && assigneeId === id;
@@ -265,9 +274,9 @@ function AssigneePickerImpl({
       )}
 
       {/* Agents */}
-      {filteredAgents.length > 0 && (
+      {visibleAgents.length > 0 && (
         <PickerSection label={t(($) => $.pickers.assignee.agents_group)}>
-          {filteredAgents.map((a) => {
+          {visibleAgents.map((a) => {
             const decision = canAssignAgentToIssue(a, {
               userId: user?.id ?? null,
               role:
@@ -313,9 +322,9 @@ function AssigneePickerImpl({
 
       {/* Squads — group ownership; assigning to a squad routes the issue to
           its leader agent on the backend. */}
-      {filteredSquads.length > 0 && (
+      {visibleSquads.length > 0 && (
         <PickerSection label={t(($) => $.pickers.assignee.squads_group)}>
-          {filteredSquads.map((s) => {
+          {visibleSquads.map((s) => {
             const runtimeBound = runnableAgentIds.has(s.leader_id);
             return (
               <PickerItem
@@ -345,8 +354,8 @@ function AssigneePickerImpl({
       )}
 
       {filteredMembers.length === 0 &&
-        filteredAgents.length === 0 &&
-        filteredSquads.length === 0 &&
+        visibleAgents.length === 0 &&
+        visibleSquads.length === 0 &&
         filter && <PickerEmpty />}
     </PropertyPicker>
   );
