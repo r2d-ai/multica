@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
+import { issueKeys } from "@multica/core/issues/queries";
 import { NavigationProvider } from "../../navigation";
 import type { NavigationAdapter } from "../../navigation";
 import {
@@ -11,6 +12,18 @@ import {
   parseCommentHighlightHash,
   useCanonicalIssueUrl,
 } from "./issue-detail-route";
+
+const projectRealtimeScope = vi.fn();
+
+vi.mock("@multica/core/realtime", () => ({
+  useProjectRealtimeScope: (id: string | null | undefined) => projectRealtimeScope(id),
+}));
+
+vi.mock("./issue-detail", () => ({
+  IssueDetail: () => <div data-testid="issue-detail" />,
+  IssueDetailSkeleton: () => <div data-testid="issue-detail-skeleton" />,
+  IssueNotFound: () => <div data-testid="issue-not-found" />,
+}));
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -101,6 +114,25 @@ describe("useCanonicalIssueUrl", () => {
     );
     expect(replace).toHaveBeenCalledWith("/acme/issues/TRS-134#comment-comment-7");
   });
+
+  // Regression: the address-bar rewrite to `PREFIX-NUMBER` made a shared
+  // Project's issue URL unresolvable for a collaborator whose active
+  // Workspace is not the issue owner's. `GET /api/issues/{identifier}` binds
+  // the identifier to the active Workspace's issue prefix, so the rewritten
+  // URL 404s on reload. The UUID path resolves through the Project ACL, so a
+  // cross-Workspace issue must keep it.
+  it("keeps the UUID for an issue owned by another workspace", () => {
+    renderHook(
+      () => useCanonicalIssueUrl(
+        "cb240efb-154c-42a8-ae92-42b02676feca",
+        "DENE-2",
+        "",
+        "ws-owner",
+      ),
+      { wrapper },
+    );
+    expect(replace).not.toHaveBeenCalled();
+  });
 });
 
 describe("parseCommentHighlightHash", () => {
@@ -175,6 +207,49 @@ describe("IssueDetailRoute with an identifier that names no issue", () => {
 
     // A failed resolve must never rewrite the URL.
     expect(replace).not.toHaveBeenCalled();
+    qc.clear();
+  });
+});
+
+describe("IssueDetailRoute project realtime scope", () => {
+  // Regression: only the Project detail surface joined the Project realtime
+  // room, so a collaborator whose home Workspace is not the issue owner's
+  // received no issue/comment events while viewing the issue directly.
+  it("joins the issue's Project room so cross-workspace updates arrive", () => {
+    replace.mockClear();
+    push.mockClear();
+    projectRealtimeScope.mockClear();
+    const issueId = "cb240efb-154c-42a8-ae92-42b02676feca";
+    const qc = new QueryClient({
+      defaultOptions: { queries: { staleTime: Infinity, retry: false } },
+    });
+    qc.setQueryData(issueKeys.detail("ws-1", issueId), {
+      id: issueId,
+      identifier: "DENE-2",
+      workspace_id: "ws-owner",
+      project_id: "project-1",
+      title: "Shared issue",
+    });
+
+    render(
+      <QueryClientProvider client={qc}>
+        <NavigationProvider
+          value={{
+            push,
+            replace,
+            back: vi.fn(),
+            pathname: `/acme/issues/${issueId}`,
+            searchParams: new URLSearchParams(),
+            hash: "",
+            getShareableUrl: (p: string) => `https://app.multica.com${p}`,
+          }}
+        >
+          <IssueDetailRoute routeId={issueId} />
+        </NavigationProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(projectRealtimeScope).toHaveBeenCalledWith("project-1");
     qc.clear();
   });
 });

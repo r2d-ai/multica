@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCanonicalIssue } from "@multica/core/issues/canonical-id";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { useProjectRealtimeScope } from "@multica/core/realtime";
 import { useNavigation } from "../../navigation";
 import { IssueDetail, IssueDetailSkeleton, IssueNotFound } from "./issue-detail";
 
@@ -23,15 +24,26 @@ interface IssueDetailRouteProps {
  *
  * A replace, not a push: the UUID URL is the same page, and a history entry
  * for it would make Back bounce the user between two spellings of one issue.
+ *
+ * `issueWorkspaceId` suppresses the rewrite for an issue owned by another
+ * Workspace. `GET /api/issues/{identifier}` binds the prefix to the ACTIVE
+ * Workspace, so `DENE-2` is unresolvable from a collaborator's home Workspace
+ * and the canonical URL would 404 on reload. The UUID path resolves through
+ * the Project ACL instead, so a cross-Workspace issue keeps it.
  */
 export function useCanonicalIssueUrl(
   routeId: string,
   identifier: string | undefined,
   hash = "",
+  issueWorkspaceId?: string,
 ) {
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
-  const canonicalHref = identifier ? `${paths.issueDetail(identifier)}${hash}` : null;
+  const activeWsId = useWorkspaceId();
+  const foreignIssue =
+    !!issueWorkspaceId && !!activeWsId && issueWorkspaceId !== activeWsId;
+  const canonicalHref =
+    !foreignIssue && identifier ? `${paths.issueDetail(identifier)}${hash}` : null;
   // `useWorkspacePaths()` and the navigation adapter are both rebuilt on
   // render, so this ref — not the dependency array — is what guarantees the
   // replace runs once per target instead of on every commit.
@@ -79,7 +91,13 @@ export function IssueDetailRoute({ routeId, onDelete }: IssueDetailRouteProps) {
   const { canonicalId, issue, isResolving, notFound } = useCanonicalIssue(wsId, routeId);
   const highlight = useCommentHighlightHash();
 
-  useCanonicalIssueUrl(routeId, issue?.identifier, highlight.hash);
+  useCanonicalIssueUrl(routeId, issue?.identifier, highlight.hash, issue?.workspace_id);
+
+  // Join the Project's realtime room while this issue is open. Project-scoped
+  // issue/comment events are fanned out to that room in addition to the owner
+  // Workspace broadcast, which is the only way a collaborator whose home
+  // Workspace is not the owner's receives them on the issue surface.
+  useProjectRealtimeScope(issue?.project_id ?? null);
 
   if (isResolving) return <IssueDetailSkeleton />;
 
