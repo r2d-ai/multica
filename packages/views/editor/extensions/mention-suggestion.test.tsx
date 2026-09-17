@@ -6,7 +6,8 @@ import { issueKeys, PAGINATED_CATEGORIES } from "@multica/core/issues/queries";
 import { statusCategoryOfKey } from "@multica/core/issues";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { IssueStatusCategory, ListIssuesCache } from "@multica/core/types";
-import type { QueryClient } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
+import { r2dAssignableActorKeys } from "@multica/core/projects/r2d-assignable-actors";
 import enCommon from "../../locales/en/common.json";
 import enAuth from "../../locales/en/auth.json";
 import enSettings from "../../locales/en/settings.json";
@@ -93,6 +94,7 @@ vi.mock("../../common/actor-avatar", () => ({
 
 import {
   createMentionSuggestion,
+  mentionMemberItems,
   MentionList,
   type MentionListRef,
   type MentionItem,
@@ -1333,5 +1335,37 @@ describe("MentionList cancelled demotion", () => {
       expect(rowLabels()).toEqual(["MUL-92", "MUL-91"]);
       expect(headings()).toContain("Cancelled");
     });
+  });
+});
+
+describe("mentionMemberItems", () => {
+  it("offers the Project's granted collaborators when a Project is in context", () => {
+    const qc = new QueryClient();
+    qc.setQueryData(workspaceKeys.members("ws-1"), [
+      { user_id: "user-1", name: "Ada Lovelace", role: "member" },
+    ]);
+    qc.setQueryData(r2dAssignableActorKeys.members("project-1"), [
+      { type: "member", id: "user-1", name: "Ada Lovelace" },
+      { type: "member", id: "user-2", name: "Foreign Collaborator" },
+    ]);
+
+    const items = mentionMemberItems(qc, "project-1", "");
+
+    expect(items.map((i) => i.label)).toContain("Foreign Collaborator");
+    expect(items.every((i) => i.type === "member")).toBe(true);
+  });
+
+  it("keeps the Workspace member list without a Project context", () => {
+    const qc = new QueryClient();
+    qc.setQueryData(workspaceKeys.members("ws-1"), [
+      { user_id: "user-1", name: "Ada Lovelace", role: "member" },
+    ]);
+    qc.setQueryData(r2dAssignableActorKeys.members("project-1"), [
+      { type: "member", id: "user-2", name: "Foreign Collaborator" },
+    ]);
+
+    const items = mentionMemberItems(qc, null, "");
+    expect(items.map((i) => i.label)).toContain("Ada Lovelace");
+    expect(items.map((i) => i.label)).not.toContain("Foreign Collaborator");
   });
 });

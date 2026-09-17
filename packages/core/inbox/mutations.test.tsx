@@ -8,10 +8,10 @@ import type { ReactNode } from "react";
 
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import type { InboxItem, InboxWorkspaceUnread } from "../types";
+import type { InboxItem } from "../types";
 import { useMarkInboxRead, useMarkInboxUnread, useUnarchiveInbox } from "./mutations";
-import { inboxKeys, useInboxUnreadCount } from "./queries";
-import { onInboxSummaryInvalidate } from "./ws-updaters";
+import { inboxKeys, inboxUnreadCountOptions, useInboxUnreadCount } from "./queries";
+import { onInboxInvalidate } from "./ws-updaters";
 import { createQueryClient } from "../query-client";
 
 vi.mock("../hooks", () => ({
@@ -58,12 +58,14 @@ function listCache(qc: QueryClient) {
   return qc.getQueryData<InboxItem[]>(inboxKeys.list(WORKSPACE_ID)) ?? [];
 }
 
-function summaryCount(qc: QueryClient) {
-  const summary = qc.getQueryData<InboxWorkspaceUnread[]>(
-    inboxKeys.unreadSummary(),
+/** The sidebar badge's cache — the workspace-scoped deduped unread count. */
+function badgeCount(qc: QueryClient) {
+  return (
+    qc.getQueryData<number>(inboxUnreadCountOptions(WORKSPACE_ID).queryKey) ?? 0
   );
-  return summary?.find((e) => e.workspace_id === WORKSPACE_ID)?.count;
 }
+
+const BADGE_KEY = inboxUnreadCountOptions(WORKSPACE_ID).queryKey;
 
 describe("useMarkInboxUnread", () => {
   let queryClient: QueryClient;
@@ -246,10 +248,7 @@ describe("unread summary is server-owned", () => {
     queryClient.setQueryData<InboxItem[]>(inboxKeys.list(WORKSPACE_ID), [
       item({ id: "inbox-1", read: false, archived: false }),
     ]);
-    queryClient.setQueryData<InboxWorkspaceUnread[]>(
-      inboxKeys.unreadSummary(),
-      [{ workspace_id: WORKSPACE_ID, count: 1 }],
-    );
+    queryClient.setQueryData<number>(BADGE_KEY, 1);
 
     const { result } = renderHook(() => useMarkInboxRead(), {
       wrapper: createWrapper(queryClient),
@@ -260,11 +259,11 @@ describe("unread summary is server-owned", () => {
     // The row flipped immediately...
     expect(listCache(queryClient)[0]?.read).toBe(true);
     // ...and the badge was never written locally; only invalidated.
-    expect(summaryCount(queryClient)).toBe(1);
+    expect(badgeCount(queryClient)).toBe(1);
     expect(
       queryClient
         .getQueryCache()
-        .find({ queryKey: inboxKeys.unreadSummary() })?.state.isInvalidated,
+        .find({ queryKey: BADGE_KEY })?.state.isInvalidated,
     ).toBe(true);
   });
 
@@ -284,37 +283,31 @@ describe("unread summary is server-owned", () => {
     ["already cached", true],
     ["first load", false],
   ])(
-    "converges after a late summary response — %s",
+    "converges after a late count response — %s",
     async (_label, cached) => {
       const qc = createQueryClient();
       qc.setQueryData<InboxItem[]>(inboxKeys.list(WORKSPACE_ID), [
         item({ id: "inbox-1", read: false, archived: false }),
       ]);
       if (cached) {
-        qc.setQueryData<InboxWorkspaceUnread[]>(inboxKeys.unreadSummary(), [
-          { workspace_id: WORKSPACE_ID, count: 1 },
-        ]);
+        qc.setQueryData<number>(BADGE_KEY, 1);
         await qc.invalidateQueries({
-          queryKey: inboxKeys.unreadSummary(),
+          queryKey: BADGE_KEY,
           refetchType: "none",
         });
       }
 
-      let releaseFirst!: (rows: InboxWorkspaceUnread[]) => void;
-      const firstResponse = new Promise<InboxWorkspaceUnread[]>((resolve) => {
-        releaseFirst = resolve;
+      let releaseFirst!: (count: number) => void;
+      const firstResponse = new Promise<{ count: number }>((resolve) => {
+        releaseFirst = (count) => resolve({ count });
       });
       let serverCount = 1;
-      const getInboxUnreadSummary = vi
+      const getUnreadInboxCount = vi
         .fn()
         .mockImplementationOnce(() => firstResponse)
-        .mockImplementation(async () =>
-          serverCount > 0
-            ? [{ workspace_id: WORKSPACE_ID, count: serverCount }]
-            : [],
-        );
+        .mockImplementation(async () => ({ count: serverCount }));
       setApiInstance({
-        getInboxUnreadSummary,
+        getUnreadInboxCount,
         markInboxRead: vi.fn(async (id: string) => {
           serverCount = 0;
           return item({ id, read: true });
@@ -330,13 +323,11 @@ describe("unread summary is server-owned", () => {
       );
 
       try {
-        // The first summary read is on the wire and still open.
+        // The first count read is on the wire and still open.
         await waitFor(() =>
-          expect(getInboxUnreadSummary).toHaveBeenCalledTimes(1),
+          expect(getUnreadInboxCount).toHaveBeenCalledTimes(1),
         );
-        expect(qc.getQueryState(inboxKeys.unreadSummary())?.fetchStatus).toBe(
-          "fetching",
-        );
+        expect(qc.getQueryState(BADGE_KEY)?.fetchStatus).toBe("fetching");
 
         await act(async () => {
           await result.current.markRead.mutateAsync("inbox-1");
@@ -344,20 +335,20 @@ describe("unread summary is server-owned", () => {
         // A self-event, or an event from another client, can arrive before the
         // first read answers — it must not be swallowed by that request.
         await act(async () => {
-          await onInboxSummaryInvalidate(qc);
+          await onInboxInvalidate(qc, WORKSPACE_ID);
         });
         // Now the pre-change response finally lands.
         await act(async () => {
-          releaseFirst([{ workspace_id: WORKSPACE_ID, count: 1 }]);
+          releaseFirst(1);
           await firstResponse;
         });
 
         expect(listCache(qc)[0]?.read).toBe(true);
         await waitFor(() => expect(result.current.count).toBe(0));
         // Convergence came from a fresh read, not from the stale one.
-        expect(getInboxUnreadSummary.mock.calls.length).toBeGreaterThan(1);
+        expect(getUnreadInboxCount.mock.calls.length).toBeGreaterThan(1);
       } finally {
-        releaseFirst([]);
+        releaseFirst(0);
         unmount();
         qc.clear();
       }

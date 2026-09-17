@@ -10,6 +10,10 @@ import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
 import { useCommentDraftStore } from "@multica/core/issues/stores";
 import { composeAnnotatedReply, hasReplyIntent } from "@multica/core/drafts/reply-annotation";
 import { ReplyAnnotations } from "./reply-annotations";
+import { useQuery } from "@tanstack/react-query";
+import { getCurrentWsId } from "@multica/core/platform";
+import { issueDetailOptions } from "@multica/core/issues/queries";
+import { projectAssignableActorsOptions } from "@multica/core/projects/r2d-assignable-actors";
 import { useT } from "../../i18n";
 import { CommentTriggerChips } from "./comment-trigger-chips";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
@@ -31,6 +35,21 @@ interface CommentInputProps {
 function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: CommentInputProps) {
   const { t } = useT("issues");
   const { t: tEditor } = useT("editor");
+  // The comment composer writes into this Issue's Project, so member mentions
+  // must come from that Project's roster: a collaborator whose home Workspace
+  // is not the owner's is absent from the active Workspace's member list. The
+  // workspace id is read from the platform singleton (set by the URL-driven
+  // workspace layout) rather than a hook, because this component is also
+  // rendered by surfaces that do not mount a workspace provider in tests. The
+  // roster query is subscribed here purely to warm the cache the mention
+  // suggestion reads synchronously.
+  const wsId = getCurrentWsId();
+  const { data: issueProjectId } = useQuery({
+    ...issueDetailOptions(wsId ?? "", issueId),
+    enabled: !!wsId,
+    select: (issue) => issue.project_id ?? null,
+  });
+  useQuery(projectAssignableActorsOptions(issueProjectId));
   const sendShortcut = useShortcut("send");
   const editorRef = useRef<ContentEditorRef>(null);
   // Sending mid-upload would strip the pending image's blob URL out of the
@@ -249,6 +268,7 @@ function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: Comme
           onUploadingChange={uploadGate.onUploadingChange}
           debounceMs={100}
           currentIssueId={issueId}
+          mentionProjectId={issueProjectId}
           attachments={pendingAttachments}
           enableSlashCommands
           slashCommandMode="command"

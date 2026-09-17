@@ -56,12 +56,9 @@ it("refreshes an inactive Inbox after inbox:new then issue:updated (MUL-7286)", 
   const listInbox = vi.fn(async () => rows);
   setApiInstance({
     listInbox,
-    getInboxUnreadSummary: async () => [
-      {
-        workspace_id: "ws-1",
-        count: deduplicateInboxItems(rows).filter((item) => !item.read).length,
-      },
-    ],
+    getUnreadInboxCount: async () => ({
+      count: deduplicateInboxItems(rows).filter((item) => !item.read).length,
+    }),
   } as unknown as ApiClient);
 
   const handlers: Record<string, (payload: unknown) => void> = {};
