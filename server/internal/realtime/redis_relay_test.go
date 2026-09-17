@@ -223,6 +223,9 @@ func TestDualWriteBroadcasterFansOutLocallyBeforePublishing(t *testing.T) {
 // into the owner Workspace room.
 func TestDeliverEnvelopeRoutesProjectScopeToProjectRoom(t *testing.T) {
 	hub := NewHub()
+	hub.SetAuthorizer(allowScopeAuthorizer{allow: map[string]bool{
+		ScopeProject + ":project-1": true,
+	}})
 	projectClient := attachRealtimeTestClient(hub, ScopeProject, "project-1")
 	workspaceClient := attachRealtimeTestClient(hub, ScopeWorkspace, "workspace-1")
 
