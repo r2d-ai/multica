@@ -14,51 +14,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Linux is already covered by the two full backend race suites.
-  cursor-background-lifecycle:
-    needs: changes
-    if: ${{ needs.changes.outputs.runtime == 'true' }}
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && fromJSON('["self-hosted","linux","x64"]') || matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.x"
-          cache-dependency-path: server/go.sum
-      - name: Verify Cursor background lifecycle and watchdog races
-        shell: bash
-        working-directory: server
-        # Explicit, verbose selection prevents the Unix regression from silently
-        # disappearing behind a build tag or the ordinary Windows test subset.
-        run: |
-          go test -race ./pkg/agent -v -run 'TestCursorBackground|TestCaptureCursorBackground' -count=1
-          go test -race ./internal/daemon -v -run 'Test.*Background.*Watchdog|Test.*IdleWatchdog' -count=1
-      - name: Verify macOS finalization without race instrumentation
-        if: runner.os == 'macOS' && needs.changes.outputs.full != 'true'
-        working-directory: server
-        run: go test ./pkg/agent -run '^TestCursorBackgroundLifecycle/finish$' -count=1
-
-      - name: Stress macOS finalization
-        if: runner.os == 'macOS' && needs.changes.outputs.full == 'true'
-        shell: bash
-        working-directory: server
-        run: |
-          go test ./pkg/agent -run '^TestCursorBackgroundLifecycle/finish$' -count=5
-          go test -race ./pkg/agent -run '^TestCursorBackgroundLifecycle/finish$' -count=5
-      - name: Verify cgo-free macOS ownership
-        if: runner.os == 'macOS'
-        shell: bash
-        working-directory: server
-        run: CGO_ENABLED=0 go test ./pkg/agent -run '^TestCaptureCursorBackground(KernelRejectsStaleIdentity|DetachedSession|LateDescendant)$' -count=1
-
   # PRs and main pushes use the same paths. Scheduled/manual runs validate all
   # scopes, including platform stress tests, without charging every merge for them.
   changes:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
@@ -105,7 +64,7 @@ jobs:
   sqlc-check:
     needs: changes
     if: ${{ needs.changes.outputs.sqlc == 'true' }}
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -138,7 +97,7 @@ jobs:
   frontend-build:
     needs: changes
     if: ${{ needs.changes.outputs.frontend == 'true' }}
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     env:
       # Pin turbo's filesystem cache somewhere actions/cache can address.
       TURBO_CACHE_DIR: .turbo/cache
@@ -195,7 +154,7 @@ jobs:
   frontend-test:
     needs: changes
     if: ${{ needs.changes.outputs.frontend == 'true' }}
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     env:
       TURBO_CACHE_DIR: .turbo/cache
     steps:
@@ -251,7 +210,7 @@ jobs:
             total: 2
           - index: 2
             total: 2
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     env:
       TURBO_CACHE_DIR: .turbo/cache
     steps:
@@ -293,7 +252,7 @@ jobs:
   frontend:
     needs: [changes, frontend-build, frontend-test, frontend-views-test, frontend-quality]
     if: ${{ !cancelled() }}
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Check frontend job results
@@ -340,13 +299,8 @@ jobs:
   backend-tests:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' }}
-    runs-on: [self-hosted, linux, x64]
-    # `services` cannot be conditional, so the Postgres and Redis containers
-    # still start on a filtered PR. That is ~1 minute of runner time against
-    # the several minutes the gated steps below cost; job-level `if` would
-    # save it but report `skipped` to the aggregate gate, which then has to
-    # accept `skipped` as success and stops catching jobs that go missing for
-    # reasons other than the path filter.
+    runs-on: ubuntu-latest
+    # Job-level filtering skips both services on unrelated changes.
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -457,7 +411,7 @@ jobs:
   backend-agent-tests:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' }}
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     env:
       # Same policy as backend-tests: CI always executes the tests it reports.
       GOFLAGS: -count=1
@@ -499,7 +453,7 @@ jobs:
   go-vulnerability-scan:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' }}
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -520,15 +474,15 @@ jobs:
   # Preserve the existing required-check name while allowing tests, generated
   # SQL verification, and the vulnerability scan to run independently.
   backend:
-    needs: [changes, backend-tests, backend-agent-tests, sqlc-check, go-vulnerability-scan, cursor-background-lifecycle, windows-execenv, script-checks, installer]
+    needs: [changes, backend-tests, backend-agent-tests, sqlc-check, go-vulnerability-scan, macos-runtime, windows-execenv, script-checks, installer]
     if: ${{ !cancelled() }}
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Check backend job results
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-          JOB_SCOPES: '{"backend-tests":"backend","backend-agent-tests":"backend","sqlc-check":"sqlc","go-vulnerability-scan":"backend","cursor-background-lifecycle":"runtime","windows-execenv":"runtime","script-checks":"scripts","installer":"installer"}'
+          JOB_SCOPES: '{"backend-tests":"backend","backend-agent-tests":"backend","sqlc-check":"sqlc","go-vulnerability-scan":"backend","macos-runtime":"full","windows-execenv":"runtime","script-checks":"scripts","installer":"installer"}'
         run: node scripts/ci-scope.mjs gate
 
   windows-execenv:
@@ -716,11 +670,64 @@ jobs:
         # explicitly configured path reach the release executable. The same job
         # covers the npm shape, where the entry point is a `.cmd` shim that only
         # the command interpreter can run.
-        run: go test ./internal/daemon -v -run '^(TestCanonicalExecutablePath|TestTrimExtendedLengthPrefix|TestResolveAgentExecutablePathKeeps|TestResolveAgentEntry(FollowsRetargetedInstallerJunction|CanonicalizesRediscoveredJunction|ForLaunchKeepsCmdShimLaunchable|ForLaunchRejectsUnverifiedInitialJunctionTarget|ForLaunchRejectsRediscoveredJunctionWhenFinalPathResolutionFails|DoesNotSharePreRetargetSingleflightResult|ForLaunchFailsWhenJunctionKeepsRetargeting)|TestHandleTaskReportsWindowsCodexProcessStartFailure)' -count=1 -timeout=5m
+        run: go test ./internal/daemon -v -run '^(TestCanonicalExecutablePath|TestTrimExtendedLengthPrefix|TestResolveAgentExecutablePathKeeps|TestResolveAgentExecutablePath_ProfileOverride|TestResolveAgentEntry(FollowsRetargetedInstallerJunction|CanonicalizesRediscoveredJunction|ForLaunchKeepsCmdShimLaunchable|ForLaunchRejectsUnverifiedInitialJunctionTarget|ForLaunchRejectsRediscoveredJunctionWhenFinalPathResolutionFails|DoesNotSharePreRetargetSingleflightResult|ForLaunchFailsWhenJunctionKeepsRetargeting)|TestHandleTaskReportsWindowsCodexProcessStartFailure)' -count=1 -timeout=5m
 
       - name: Build Windows CLI helper entrypoint
         working-directory: server
         run: go build ./cmd/multica
+
+      - name: Test Windows Cursor background ownership
+        working-directory: server
+        # Cursor's background shell is captured through a second Job Object, and
+        # TestCaptureCursorBackgroundProcessRejectsForeignJob is windows-tagged,
+        # so it builds nowhere else. This used to be its own windows-latest job
+        # on the same runtime scope as this one; same runner, same package, same
+        # concern, so it is a step here instead of a second runner per merge.
+        # Last on purpose: absorbing another job's steps means this job's own
+        # failure modes now truncate that job's coverage too, and Cursor
+        # ownership is the newest arrival, not the load-bearing one. The ubuntu
+        # backend job still covers the untagged and Unix arms.
+        run: go test -race ./pkg/agent -v -run 'TestCursorBackground|TestCaptureCursorBackground' -count=1 -timeout=5m
+
+  # The only macOS runner here, and the only place cursor_background_process_darwin.go
+  # is ever built: it signals a process group through XNU's per-process unique
+  # identity so a recycled PID cannot redirect a kill, and the two tests pinning
+  # that are `//go:build darwin`. Windows keeps its arm as a step in
+  # windows-execenv, but macOS has no sibling job to join, and this covers one
+  # integration's background shell rather than the shared launch path every
+  # agent uses. So the daily full run carries it instead of charging every
+  # backend merge for a macOS runner; `full` also means the stress counts below
+  # are now the only finalization pass, replacing the single-count merge variant.
+  macos-runtime:
+    needs: changes
+    if: ${{ needs.changes.outputs.full == 'true' }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: server/go.sum
+      - name: Verify Cursor background lifecycle and watchdog races
+        shell: bash
+        working-directory: server
+        # Explicit, verbose selection prevents the Unix regression from silently
+        # disappearing behind a build tag.
+        run: |
+          go test -race ./pkg/agent -v -run 'TestCursorBackground|TestCaptureCursorBackground' -count=1
+          go test -race ./internal/daemon -v -run 'Test.*Background.*Watchdog|Test.*IdleWatchdog' -count=1
+
+      - name: Stress macOS finalization
+        shell: bash
+        working-directory: server
+        run: |
+          go test ./pkg/agent -run '^TestCursorBackgroundLifecycle/finish$' -count=5
+          go test -race ./pkg/agent -run '^TestCursorBackgroundLifecycle/finish$' -count=5
+
+      - name: Verify cgo-free macOS ownership
+        shell: bash
+        working-directory: server
+        run: CGO_ENABLED=0 go test ./pkg/agent -run '^TestCaptureCursorBackground(KernelRejectsStaleIdentity|DetachedSession|LateDescendant)$' -count=1
 
   image-budget:
     # Soft gate against the 21.7MB of raw PNG/JPG that MUL-6352 cleared out:
@@ -729,7 +736,7 @@ jobs:
     # and the branch it came from was already checked.
     needs: changes
     if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -761,7 +768,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && fromJSON('["self-hosted","linux","x64"]') || matrix.os }}
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
