@@ -19,6 +19,32 @@ import { isImeComposing } from "@multica/core/utils";
 const HIGHLIGHT_NAME = "multica-find";
 const ACTIVE_HIGHLIGHT_NAME = "multica-find-active";
 
+// These rules cannot live in build-time CSS: Turbopack's parser (Lightning CSS)
+// rejects the `::highlight()` pseudo-element, which it does not recognise, and
+// a CSS parse error fails every route in dev. Injecting them at runtime keeps
+// the feature and lets the dev server use Turbopack.
+const FIND_HIGHLIGHT_CSS = `
+::highlight(${HIGHLIGHT_NAME}) {
+  background-color: var(--find-match);
+  color: var(--find-match-foreground);
+}
+::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
+  background-color: var(--find-match-active);
+  color: var(--find-match-foreground);
+}
+`;
+
+const FIND_HIGHLIGHT_STYLE_ID = "multica-find-highlight-styles";
+
+function ensureFindHighlightStyles() {
+  if (typeof document === "undefined") return;
+  if (document.getElementById(FIND_HIGHLIGHT_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = FIND_HIGHLIGHT_STYLE_ID;
+  style.textContent = FIND_HIGHLIGHT_CSS;
+  document.head.appendChild(style);
+}
+
 // Feature detection, evaluated lazily per call site. On browsers without the
 // CSS Custom Highlight API the bar still opens and navigates, it just paints
 // no tint. Guard `CSS`/`Highlight` for SSR too (no `window`).
@@ -129,6 +155,10 @@ export function useInPageFind(options: {
   enabled?: boolean;
 }): UseInPageFindResult {
   const { container, contentKey, enabled = true } = options;
+
+  useEffect(() => {
+    if (highlightApiSupported()) ensureFindHighlightStyles();
+  }, []);
 
   const [open, setOpen] = useState(false);
   const [query, setQueryState] = useState("");

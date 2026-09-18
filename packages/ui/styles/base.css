@@ -403,11 +403,7 @@ html[data-dnd-dragging="true"] * {
  * layers cleanly over React-rendered markdown and the contenteditable
  * title/description editors. `multica-find-active` is registered with a higher
  * priority so the current match paints on top of the dimmer all-matches tint. */
-::highlight(multica-find) {
-  background-color: var(--find-match);
-  color: var(--find-match-foreground);
-}
-::highlight(multica-find-active) {
-  background-color: var(--find-match-active);
-  color: var(--find-match-foreground);
-}
+/* The rules themselves ship as a runtime stylesheet in
+ * `use-in-page-find.ts`: Turbopack's CSS parser (Lightning CSS) rejects
+ * `::highlight()` — it does not know the CSS Custom Highlight API — and a parse
+ * error there fails every route in dev. */
